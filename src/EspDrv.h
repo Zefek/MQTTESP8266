@@ -11,14 +11,24 @@
 #define ESP_NOTCONNECTED 0
 #define ESP_CONNECTED 1
 
+#define WL_DISCONNECTED 0
+#define WL_CONNECTED 1
+#define WL_IDLE_STATUS -1
+
+#define CL_DISCONNECTED 0
+#define CL_CONNECTED 1
+
 #include <Arduino.h>
 
 class EspDrv
 {
   private:
     Stream *serial;
-    char* buffer;
+    char buffer[32];
+    char statusBuffer[57];
     int bufLength = 0;
+    int statusBufferLength = 0;
+    bool writeToStatusBuffer = false;
     uint8_t state = ESPREADSTATE1;
     uint8_t *data;
     uint16_t dataLength = 0;
@@ -30,16 +40,20 @@ class EspDrv
     void SendCmd(const __FlashStringHelper* cmd, ...);
     void TagReceived(const char* pTag);
     bool WaitForTag(const char* pTag, unsigned long timeout);
+    void GetStatus(int* wifiStatus);
     uint8_t connectionState = ESP_NOTCONNECTED;
     unsigned long startDataReadMillis = 0;
 
   public:
     EspDrv(Stream *serial);
+    void Init();
     int Connect(const char* ssid, const char* password);
     int TCPConnect(const char* url, int port);
+    void Disconnect();
     void Write(uint8_t* data, uint16_t length);
     void Loop();
     void (*DataReceived) (uint8_t* buffer, int length);
     uint8_t GetConnectionStatus();
+    uint8_t GetClientStatus();
 };
 #endif

@@ -40,9 +40,6 @@
 #define MQTTQOS1        (1 << 1)
 #define MQTTQOS2        (2 << 1)
 
-#define MQTT_CONNECTED 0
-#define MQTT_NOTCONNECTED 1
-
 class MQTTClient
 {
   private:
@@ -55,19 +52,19 @@ class MQTTClient
     static bool pingOutstanding;
     uint32_t nextMsgId;
     static void DataReceived(uint8_t* data, int length);
-    void Login(const char *id, const char *user, const char *pass, const char* willTopic, uint8_t willQos, boolean willRetain, const char* willMessage, boolean cleanSession);
+    bool Login(const char *id, const char *user, const char *pass, const char* willTopic, uint8_t willQos, boolean willRetain, const char* willMessage, boolean cleanSession);
     uint16_t WriteString(const char* string, uint8_t* buf, uint16_t pos);
     void Write(uint8_t header, uint8_t* buf, uint16_t length);
     size_t BuildHeader(uint8_t header, uint8_t* buf, uint16_t length);
     static void (*callback)(char* topic, uint8_t* payload, uint16_t plength);
     void (*connected)();
-    static uint8_t connectionState;
-    static uint8_t stateChangedToConnected;
-    static bool subsack;
+    bool isConnected = false;
+    static bool suback;
+    static bool connack;
     
   public:
-    MQTTClient(EspDrv *espDriver, void(*callback)(char* topic, uint8_t* payload, uint16_t plength), void(*connected)());
-    void Connect(const char* url, uint16_t port, const char *id, const char *user, const char *pass, const char* willTopic, uint8_t willQos, boolean willRetain, const char* willMessage, boolean cleanSession);
+    MQTTClient(EspDrv *espDriver, void(*callback)(char* topic, uint8_t* payload, uint16_t plength));
+    bool Connect(const char* url, uint16_t port, const char *id, const char *user, const char *pass, const char* willTopic, uint8_t willQos, boolean willRetain, const char* willMessage, boolean cleanSession);
     void Disconnect();
     void Subscribe(const char* topic);
     void Subscribe(const char* topic, uint8_t qos);
@@ -75,8 +72,8 @@ class MQTTClient
     void Publish(const char* topic, const char* payload, boolean retained);
     void Publish(const char* topic, const uint8_t* payload, unsigned int plength);
     void Publish(const char* topic, const uint8_t* payload, unsigned int plength, boolean retained);
-    void Loop();
-    uint8_t GetState();
+    bool Loop();
+    bool IsConnected();
 };
 
 #endif
