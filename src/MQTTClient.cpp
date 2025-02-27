@@ -1,4 +1,5 @@
 #include "MQTTClient.h"
+#include<avr/wdt.h>
 
 static bool MQTTClient::pingOutstanding = false;
 static void (*MQTTClient::callback)(char* topic, uint8_t* payload, uint16_t plength) = 0;
@@ -135,7 +136,7 @@ uint16_t MQTTClient::WriteString(const char* string, uint8_t* buf, uint16_t pos)
 
 void MQTTClient::Subscribe(const char* topic) 
 {
-    Subscribe(topic, 0);
+  Subscribe(topic, 0);
 }
 
 void MQTTClient::Subscribe(const char *topic, uint8_t qos)
@@ -174,6 +175,7 @@ void MQTTClient::Subscribe(const char *topic, uint8_t qos)
   while(!MQTTClient::suback)
   {
     client->Loop();
+    wdt_reset();
   }
   delay(200);
   client->Loop();

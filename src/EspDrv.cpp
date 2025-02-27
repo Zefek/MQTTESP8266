@@ -1,5 +1,6 @@
 #include "EspDrv.h"
 #include <Arduino.h>
+#include<avr/wdt.h>
 
 const char* ESPTAGS[] = {
   "OK",
@@ -16,7 +17,6 @@ EspDrv::EspDrv(Stream* serial)
 
 void EspDrv::Loop() 
 {
-  
   while (this->serial->available()) 
   {
     if (this->state == ESPREADSTATE_DATA_LENGTH1) 
@@ -106,49 +106,63 @@ void EspDrv::Loop()
 void EspDrv::Init()
 {
   this->SendCmd(F("ATE0"));
-  WaitForTag("OK", 10000);
-  this->tag = "";
-  this->SendCmd(F("AT+RST"));
-  WaitForTag("OK", 30000);
-  this->tag = "";
-  delay(3000);
-  this->SendCmd(F("ATE0"));
-  WaitForTag("OK", 10000);
-  this->tag = "";
+  if(WaitForTag("OK", 10000))
+  {
+    this->tag = "";
+    this->SendCmd(F("AT+RST"));
+    if(WaitForTag("OK", 30000))
+    {
+      this->tag = "";
+      delay(3000);
+      this->SendCmd(F("ATE0"));
+      WaitForTag("OK", 10000);
+      this->tag = "";
+    }
+  }
 }
 
 int EspDrv::Connect(const char* ssid, const char* password) 
 {
   this->SendCmd(F("AT+CWJAP_CUR=\"%s\",\"%s\""), ssid, password);
-  WaitForTag("OK", 10000);
-  this->tag = "";
-  delay(100);
-  connectionState = ESP_CONNECTED;
-  this->SendCmd(F("AT+CIPMUX=0"));
-  WaitForTag("OK", 10000);
-  this->tag = "";
-  delay(100);
-  uint8_t wifiStatus = GetConnectionStatus();
-  return wifiStatus == WL_CONNECTED;
+  if(WaitForTag("OK", 10000))
+  {
+    this->tag = "";
+    delay(100);
+    connectionState = ESP_CONNECTED;
+    this->SendCmd(F("AT+CIPMUX=0"));
+    if(WaitForTag("OK", 10000))
+    {
+      this->tag = "";
+      delay(100);
+      uint8_t wifiStatus = GetConnectionStatus();
+      return wifiStatus == WL_CONNECTED;
+    }
+  }
+  return WL_DISCONNECTED;
 }
 
 int EspDrv::TCPConnect(const char* url, int port) {
   this->SendCmd(F("AT+CIPSTART=\"TCP\",\"%s\",%d"), url, port);
-  WaitForTag("OK", 10000);
-  this->tag = "";
-  delay(100);
+  if(WaitForTag("OK", 10000))
+  {
+    this->tag = "";
+    delay(100);
+    return 0;
+  }
   return 0;
 }
 
 void EspDrv::Write(uint8_t* data, uint16_t length) 
 {
   this->SendCmd(F("AT+CIPSEND=%d"), length);
-  WaitForTag(">", 1000);
-  this->data = data;
-  this->dataLength = length;
-  SendData();
-  WaitForTag("SEND OK", 1000);
-  delay(100);
+  if(WaitForTag(">", 1000))
+  {
+    this->data = data;
+    this->dataLength = length;
+    SendData();
+    WaitForTag("SEND OK", 1000);
+    delay(100);
+  }
 }
 
 void EspDrv::SendData() {
@@ -174,6 +188,7 @@ bool EspDrv::WaitForTag(const char* pTag, unsigned long timeout)
   while (strncmp(this->tag, pTag, strlen(pTag)) != 0 && millis() - m < timeout) 
   {
     this->Loop();
+    wdt_reset();
   }
   bool result = strncmp(this->tag, pTag, strlen(pTag)) == 0;
   this->tag = "";
@@ -189,11 +204,13 @@ void EspDrv::GetStatus(int* wifiStatus)
   statusBufferLength = 0;
   writeToStatusBuffer = true;
   this->SendCmd(F("AT+CIPSTATUS"));
-  WaitForTag("OK", 10000);
-  writeToStatusBuffer = false;
-  this->tag = "";
-  statusBuffer[statusBufferLength] = '\0';
-  sscanf(statusBuffer, "STATUS:%d", wifiStatus);
+  if(WaitForTag("OK", 10000))
+  {
+    writeToStatusBuffer = false;
+    this->tag = "";
+    statusBuffer[statusBufferLength] = '\0';
+    sscanf(statusBuffer, "STATUS:%d", wifiStatus);
+  }
 }
 
 uint8_t EspDrv::GetConnectionStatus()
