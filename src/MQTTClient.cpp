@@ -40,13 +40,14 @@ MQTTClient::MQTTClient(EspDrv *espDriver, void(*callback)(char* topic, uint8_t* 
   this->callback = callback;
 }
 
-bool MQTTClient::Connect(const char* url, uint16_t port, const char *id, const char *user, const char *pass, const char* willTopic, uint8_t willQos, boolean willRetain, const char* willMessage, boolean cleanSession)
+bool MQTTClient::Connect(MQTTConnectData mqttConnectData)
 {
-  this->client->TCPConnect(url, port);
-  return this->Login(id, user, pass, willTopic, willQos, willRetain, willMessage, cleanSession);
+  this->client->TCPConnect(mqttConnectData.url, mqttConnectData.port);
+  this->keepAlive = mqttConnectData.keepAlive;
+  return this->Login(mqttConnectData);
 }
 
-bool MQTTClient::Login(const char *id, const char *user, const char *pass, const char* willTopic, uint8_t willQos, boolean willRetain, const char* willMessage, boolean cleanSession)
+bool MQTTClient::Login(MQTTConnectData mqttConnectData)
 {
   connack = false;
   uint16_t length = MQTT_MAX_HEADER_SIZE;
@@ -65,22 +66,22 @@ bool MQTTClient::Login(const char *id, const char *user, const char *pass, const
   }
 
   uint8_t v;
-  if (willTopic) 
+  if (mqttConnectData.willTopic) 
   {
-    v = 0x04|(willQos<<3)|(willRetain<<5);
+    v = 0x04|(mqttConnectData.willQos<<3)|(mqttConnectData.willRetain<<5);
   } else 
   {
     v = 0x00;
   }
-  if (cleanSession)
+  if (mqttConnectData.cleanSession)
   {
     v = v|0x02;
   }
 
-  if(user != NULL) 
+  if(mqttConnectData.user != NULL) 
   {
     v = v|0x80;
-    if(pass != NULL) 
+    if(mqttConnectData.pass != NULL) 
     {
       v = v|(0x80>>1);
     }
@@ -90,24 +91,24 @@ bool MQTTClient::Login(const char *id, const char *user, const char *pass, const
   this->buffer[length++] = ((this->keepAlive) >> 8);
   this->buffer[length++] = ((this->keepAlive) & 0xFF);
 
-  CHECK_STRING_LENGTH(length,id)
-  length = WriteString(id,this->buffer,length);
-  if (willTopic) 
+  CHECK_STRING_LENGTH(length,mqttConnectData.id)
+  length = WriteString(mqttConnectData.id,this->buffer,length);
+  if (mqttConnectData.willTopic) 
   {
-    CHECK_STRING_LENGTH(length,willTopic)
-    length = WriteString(willTopic,this->buffer,length);
-    CHECK_STRING_LENGTH(length,willMessage)
-    length = WriteString(willMessage,this->buffer,length);
+    CHECK_STRING_LENGTH(length,mqttConnectData.willTopic)
+    length = WriteString(mqttConnectData.willTopic,this->buffer,length);
+    CHECK_STRING_LENGTH(length,mqttConnectData.willMessage)
+    length = WriteString(mqttConnectData.willMessage,this->buffer,length);
   }
 
-  if(user != NULL) 
+  if(mqttConnectData.user != NULL) 
   {
-    CHECK_STRING_LENGTH(length,user)
-    length = WriteString(user,this->buffer,length);
-    if(pass != NULL) 
+    CHECK_STRING_LENGTH(length,mqttConnectData.user)
+    length = WriteString(mqttConnectData.user,this->buffer,length);
+    if(mqttConnectData.pass != NULL) 
     {
-      CHECK_STRING_LENGTH(length,pass)
-      length = WriteString(pass,this->buffer,length);
+      CHECK_STRING_LENGTH(length,mqttConnectData.pass)
+      length = WriteString(mqttConnectData.pass,this->buffer,length);
     }
   }
   Write(MQTTCONNECT,this->buffer,length-MQTT_MAX_HEADER_SIZE);
@@ -296,7 +297,7 @@ bool MQTTClient::Loop()
     return isConnected;
   }
   unsigned long currentMillis = millis();
-  if(currentMillis - lastOutActivity >= keepAlive * 1000)
+  if(currentMillis - lastOutActivity >= keepAlive * 1000 && keepAlive > 0)
   {
     if(MQTTClient::pingOutstanding)
     {

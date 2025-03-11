@@ -28,7 +28,11 @@ void EspDrv::Loop()
         sscanf(buffer, "%d", &receivedDataLength);
         bufLength = 0;
         dataRead = 0;
-        this->receivedDataBuffer = new uint8_t[receivedDataLength];
+        if(sizeof(this->receivedDataBuffer) / sizeof(this->receivedDataBuffer[0]) < receivedDataLength)
+        {
+          delete(this->receivedDataBuffer);
+          this->receivedDataBuffer = new uint8_t[receivedDataLength];
+        }
         this->state = ESPREADSTATE_DATA2;
         startDataReadMillis = millis();
       } 
@@ -45,12 +49,10 @@ void EspDrv::Loop()
       {
         this->state = ESPREADSTATE1;
         DataReceived(receivedDataBuffer, dataLength);
-        delete(receivedDataBuffer);
       }
       if(millis() - startDataReadMillis > 5000)
       {
         this->state = ESPREADSTATE1;
-        delete(receivedDataBuffer);
       }
     } 
     else if (this->state == ESPREADSTATE2) 
@@ -95,7 +97,7 @@ void EspDrv::Loop()
         }
         else if (strncmp("CLOSED", this->buffer, strlen("CLOSED")) == 0) 
         {
-          connectionState = ESP_NOTCONNECTED;
+          lastConnectionStatus = 2;
           bufLength = 0;
         }
       }
@@ -103,22 +105,24 @@ void EspDrv::Loop()
   }
 }
 
-void EspDrv::Init()
+void EspDrv::Init(uint8_t receivedBufferSize)
 {
   this->SendCmd(F("ATE0"));
   if(WaitForTag("OK", 10000))
   {
-    this->tag = "";
     this->SendCmd(F("AT+RST"));
     if(WaitForTag("OK", 30000))
     {
-      this->tag = "";
       delay(3000);
       this->SendCmd(F("ATE0"));
-      WaitForTag("OK", 10000);
-      this->tag = "";
+      if(WaitForTag("OK", 10000))
+      {
+        this->SendCmd(F("AT+CWMODE=1"));
+        WaitForTag("OK", 1000);
+      }
     }
   }
+  this->receivedDataBuffer = new uint8_t[receivedBufferSize];
 }
 
 int EspDrv::Connect(const char* ssid, const char* password) 
@@ -126,16 +130,13 @@ int EspDrv::Connect(const char* ssid, const char* password)
   this->SendCmd(F("AT+CWJAP_CUR=\"%s\",\"%s\""), ssid, password);
   if(WaitForTag("OK", 10000))
   {
-    this->tag = "";
     delay(100);
-    connectionState = ESP_CONNECTED;
     this->SendCmd(F("AT+CIPMUX=0"));
     if(WaitForTag("OK", 10000))
     {
-      this->tag = "";
       delay(100);
-      uint8_t wifiStatus = GetConnectionStatus();
-      return wifiStatus == WL_CONNECTED;
+      lastConnectionStatus = GetConnectionStatus();
+      return lastConnectionStatus == WL_CONNECTED;
     }
   }
   return WL_DISCONNECTED;
@@ -145,7 +146,6 @@ int EspDrv::TCPConnect(const char* url, int port) {
   this->SendCmd(F("AT+CIPSTART=\"TCP\",\"%s\",%d"), url, port);
   if(WaitForTag("OK", 10000))
   {
-    this->tag = "";
     delay(100);
     return 0;
   }
@@ -185,10 +185,10 @@ void EspDrv::SendCmd(const __FlashStringHelper* cmd, ...) {
 bool EspDrv::WaitForTag(const char* pTag, unsigned long timeout) 
 {
   unsigned long m = millis();
+  this->tag = "";
   while (strncmp(this->tag, pTag, strlen(pTag)) != 0 && millis() - m < timeout) 
   {
     this->Loop();
-    wdt_reset();
   }
   bool result = strncmp(this->tag, pTag, strlen(pTag)) == 0;
   this->tag = "";
@@ -199,29 +199,32 @@ void EspDrv::TagReceived(const char* pTag) {
   this->tag = pTag;
 }
 
-void EspDrv::GetStatus(int* wifiStatus)
+void EspDrv::GetStatus()
 {
+  if(millis() - statusRead < 1000 && lastConnectionStatus == 3)
+  {
+    return lastConnectionStatus;
+  }
   statusBufferLength = 0;
   writeToStatusBuffer = true;
   this->SendCmd(F("AT+CIPSTATUS"));
-  if(WaitForTag("OK", 10000))
+  if(WaitForTag("OK", 1000))
   {
     writeToStatusBuffer = false;
-    this->tag = "";
     statusBuffer[statusBufferLength] = '\0';
-    sscanf(statusBuffer, "STATUS:%d", wifiStatus);
+    sscanf(statusBuffer, "STATUS:%d", &lastConnectionStatus);
+    statusRead = millis();
   }
 }
 
 uint8_t EspDrv::GetConnectionStatus()
 {
-  int wifiStatus = 255;
-  GetStatus(&wifiStatus);
-  if(wifiStatus == 2 || wifiStatus == 3 || wifiStatus == 4)
+  GetStatus();
+  if(lastConnectionStatus == 2 || lastConnectionStatus == 3 || lastConnectionStatus == 4)
   {
     return WL_CONNECTED;
   }
-  else if(wifiStatus == 5)
+  else if(lastConnectionStatus == 5)
   {
 		return WL_DISCONNECTED;
   }
@@ -230,9 +233,8 @@ uint8_t EspDrv::GetConnectionStatus()
 
 uint8_t EspDrv::GetClientStatus()
 {
-  int wifiStatus = 255;
-  GetStatus(&wifiStatus);
-  if(wifiStatus == 3)
+  GetStatus();
+  if(lastConnectionStatus == 3)
   {
     return CL_CONNECTED;
   }

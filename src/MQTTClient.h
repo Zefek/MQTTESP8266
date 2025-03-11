@@ -40,6 +40,21 @@
 #define MQTTQOS1        (1 << 1)
 #define MQTTQOS2        (2 << 1)
 
+struct MQTTConnectData
+{
+  const char* url;
+  uint16_t port;
+  const char *id;
+  const char *user; 
+  const char *pass; 
+  const char* willTopic; 
+  uint8_t willQos;
+  boolean willRetain; 
+  const char* willMessage;
+  boolean cleanSession;
+  uint16_t keepAlive;
+};
+
 class MQTTClient
 {
   private:
@@ -52,7 +67,7 @@ class MQTTClient
     static bool pingOutstanding;
     uint32_t nextMsgId;
     static void DataReceived(uint8_t* data, int length);
-    bool Login(const char *id, const char *user, const char *pass, const char* willTopic, uint8_t willQos, boolean willRetain, const char* willMessage, boolean cleanSession);
+    bool Login(MQTTConnectData mQTTConnectData);
     uint16_t WriteString(const char* string, uint8_t* buf, uint16_t pos);
     void Write(uint8_t header, uint8_t* buf, uint16_t length);
     size_t BuildHeader(uint8_t header, uint8_t* buf, uint16_t length);
@@ -64,7 +79,7 @@ class MQTTClient
     
   public:
     MQTTClient(EspDrv *espDriver, void(*callback)(char* topic, uint8_t* payload, uint16_t plength));
-    bool Connect(const char* url, uint16_t port, const char *id, const char *user, const char *pass, const char* willTopic, uint8_t willQos, boolean willRetain, const char* willMessage, boolean cleanSession);
+    bool Connect(MQTTConnectData mQTTConnectData);
     void Disconnect();
     void Subscribe(const char* topic);
     void Subscribe(const char* topic, uint8_t qos);

@@ -40,13 +40,15 @@ class EspDrv
     void SendCmd(const __FlashStringHelper* cmd, ...);
     void TagReceived(const char* pTag);
     bool WaitForTag(const char* pTag, unsigned long timeout);
-    void GetStatus(int* wifiStatus);
+    void GetStatus();
     uint8_t connectionState = ESP_NOTCONNECTED;
     unsigned long startDataReadMillis = 0;
+    unsigned long statusRead = 0;
+    int lastConnectionStatus = 0;
 
   public:
     EspDrv(Stream *serial);
-    void Init();
+    void Init(uint8_t receivedBufferSize);
     int Connect(const char* ssid, const char* password);
     int TCPConnect(const char* url, int port);
     void Disconnect();
