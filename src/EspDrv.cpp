@@ -1,13 +1,13 @@
 #include "EspDrv.h"
 #include <Arduino.h>
-#include<avr/wdt.h>
 
 const char* ESPTAGS[] = {
   "OK",
   "ERROR",
   "FAIL",
   "SEND OK",
-  ">"
+  ">",
+  "SEND FAIL"
 };
 
 EspDrv::EspDrv(Stream* serial) 
@@ -81,7 +81,7 @@ void EspDrv::Loop()
       {
         this->statusBuffer[statusBufferLength++] = c;
       }
-      for (int i = 0; i < 5; i++) 
+      for (int i = 0; i < 6; i++) 
       {
         int compare = strncmp(ESPTAGS[i], this->buffer, strlen(ESPTAGS[i]));
         if (compare == 0) 
@@ -185,12 +185,18 @@ void EspDrv::SendCmd(const __FlashStringHelper* cmd, ...) {
 bool EspDrv::WaitForTag(const char* pTag, unsigned long timeout) 
 {
   unsigned long m = millis();
+  unsigned long t = m;
   this->tag = "";
-  while (strncmp(this->tag, pTag, strlen(pTag)) != 0 && millis() - m < timeout) 
+  while (strncmp(this->tag, pTag, strlen(pTag)) != 0 && t - m < timeout) 
   {
     this->Loop();
+    t = millis();
   }
   bool result = strncmp(this->tag, pTag, strlen(pTag)) == 0;
+  if(!result)
+  {
+    Serial.println(tag);
+  }
   this->tag = "";
   return result;
 }
@@ -203,7 +209,7 @@ void EspDrv::GetStatus()
 {
   if(millis() - statusRead < 1000 && lastConnectionStatus == 3)
   {
-    return lastConnectionStatus;
+    return;
   }
   statusBufferLength = 0;
   writeToStatusBuffer = true;
@@ -214,6 +220,10 @@ void EspDrv::GetStatus()
     statusBuffer[statusBufferLength] = '\0';
     sscanf(statusBuffer, "STATUS:%d", &lastConnectionStatus);
     statusRead = millis();
+  }
+  else
+  {
+    lastConnectionStatus = 5;
   }
 }
 

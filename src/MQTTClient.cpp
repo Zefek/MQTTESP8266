@@ -112,7 +112,8 @@ bool MQTTClient::Login(MQTTConnectData mqttConnectData)
     }
   }
   Write(MQTTCONNECT,this->buffer,length-MQTT_MAX_HEADER_SIZE);
-  while(!connack)
+  unsigned long t = millis();
+  while(!connack && t - millis() < 10000)
   {
     client->Loop();
   }
@@ -176,7 +177,6 @@ void MQTTClient::Subscribe(const char *topic, uint8_t qos)
   while(!MQTTClient::suback)
   {
     client->Loop();
-    wdt_reset();
   }
   delay(200);
   client->Loop();
