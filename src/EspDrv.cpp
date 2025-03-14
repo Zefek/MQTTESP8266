@@ -161,7 +161,7 @@ void EspDrv::Write(uint8_t* data, uint16_t length)
     this->dataLength = length;
     SendData();
     WaitForTag("SEND OK", 1000);
-    delay(100);
+    lastDataSend = millis();
   }
 }
 
@@ -179,6 +179,11 @@ void EspDrv::SendCmd(const __FlashStringHelper* cmd, ...) {
   writeToStatusBuffer = false;
   Loop();
   writeToStatusBuffer = needsToReadToStatusBuffer;
+  unsigned int t = millis();
+  if(t - lastDataSend < 1000)
+  {
+    delay(t - lastDataSend);
+  }
   this->serial->println(cmdBuf);
 }
 

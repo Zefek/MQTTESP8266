@@ -45,6 +45,7 @@ class EspDrv
     unsigned long startDataReadMillis = 0;
     unsigned long statusRead = 0;
     int lastConnectionStatus = 0;
+    unsigned long lastDataSend = 0;
 
   public:
     EspDrv(Stream *serial);
