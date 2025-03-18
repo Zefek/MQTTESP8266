@@ -1,5 +1,6 @@
 #include "EspDrv.h"
 #include <Arduino.h>
+#include <avr/wdt.h>
 
 const char* ESPTAGS[] = {
   "OK",
@@ -7,7 +8,8 @@ const char* ESPTAGS[] = {
   "FAIL",
   "SEND OK",
   ">",
-  "SEND FAIL"
+  "SEND FAIL",
+  "STATUS"
 };
 
 EspDrv::EspDrv(Stream* serial) 
@@ -77,29 +79,35 @@ void EspDrv::Loop()
       }
       this->buffer[bufLength++] = c;
       this->buffer[bufLength]='\0';
-      if(writeToStatusBuffer)
-      {
-        this->statusBuffer[statusBufferLength++] = c;
-      }
-      for (int i = 0; i < 6; i++) 
+      bool found = false;
+      for (int i = 0; i < 7; i++) 
       {
         int compare = strncmp(ESPTAGS[i], this->buffer, strlen(ESPTAGS[i]));
         if (compare == 0) 
         {
+          found = true;
           TagReceived(ESPTAGS[i]);
           bufLength = 0;
           break;
-        } 
-        else if (strncmp("+IPD,", this->buffer, strlen("+IPD,")) == 0) 
-        {
-          this->state = ESPREADSTATE_DATA_LENGTH1;
-          bufLength = 0;
         }
-        else if (strncmp("CLOSED", this->buffer, strlen("CLOSED")) == 0) 
-        {
-          lastConnectionStatus = 2;
-          bufLength = 0;
-        }
+      }
+      if(found)
+      {
+        break;
+      }
+      if (strncmp("+IPD,", this->buffer, strlen("+IPD,")) == 0) 
+      {
+        this->state = ESPREADSTATE_DATA_LENGTH1;
+        bufLength = 0;
+      }
+      else if (strncmp("CLOSED", this->buffer, strlen("CLOSED")) == 0) 
+      {
+        lastConnectionStatus = GetConnectionStatus(true);
+        bufLength = 0;
+      }
+      else if(writeToStatusBuffer)
+      {
+        this->statusBuffer[statusBufferLength++] = c;
       }
     } 
   }
@@ -120,6 +128,7 @@ void EspDrv::Init(uint8_t receivedBufferSize)
         this->SendCmd(F("AT+CWMODE=1"));
         WaitForTag("OK", 1000);
       }
+      lastConnectionStatus = GetConnectionStatus(true);
     }
   }
   this->receivedDataBuffer = new uint8_t[receivedBufferSize];
@@ -135,7 +144,7 @@ int EspDrv::Connect(const char* ssid, const char* password)
     if(WaitForTag("OK", 10000))
     {
       delay(100);
-      lastConnectionStatus = GetConnectionStatus();
+      lastConnectionStatus = GetConnectionStatus(true);
       return lastConnectionStatus == WL_CONNECTED;
     }
   }
@@ -147,6 +156,7 @@ int EspDrv::TCPConnect(const char* url, int port) {
   if(WaitForTag("OK", 10000))
   {
     delay(100);
+    GetClientStatus(true);
     return 0;
   }
   return 0;
@@ -175,15 +185,20 @@ void EspDrv::SendCmd(const __FlashStringHelper* cmd, ...) {
   va_start(args, cmd);
   vsnprintf_P(cmdBuf, CMD_BUFFER_SIZE, (char*)cmd, args);
   va_end(args);
+  unsigned int t = millis();
+  if(t - lastDataSend < 1000)
+  {
+    while(t - lastDataSend < 1000)
+    {
+      this->Loop();
+      t = millis();
+    }
+  }
   bool needsToReadToStatusBuffer = writeToStatusBuffer;
   writeToStatusBuffer = false;
   Loop();
   writeToStatusBuffer = needsToReadToStatusBuffer;
-  unsigned int t = millis();
-  if(t - lastDataSend < 1000)
-  {
-    delay(t - lastDataSend);
-  }
+  Serial.println(cmdBuf);
   this->serial->println(cmdBuf);
 }
 
@@ -194,47 +209,63 @@ bool EspDrv::WaitForTag(const char* pTag, unsigned long timeout)
   this->tag = "";
   while (strncmp(this->tag, pTag, strlen(pTag)) != 0 && t - m < timeout) 
   {
+    wdt_reset();
     this->Loop();
     t = millis();
   }
   bool result = strncmp(this->tag, pTag, strlen(pTag)) == 0;
   if(!result)
   {
+    Serial.print("Expected tag ");
+    Serial.print(pTag);
+    Serial.print(" received tag ");
     Serial.println(tag);
   }
   this->tag = "";
   return result;
 }
 
-void EspDrv::TagReceived(const char* pTag) {
+void EspDrv::TagReceived(const char* pTag) 
+{
   this->tag = pTag;
 }
 
-void EspDrv::GetStatus()
+void EspDrv::GetStatus(bool force)
 {
-  if(millis() - statusRead < 1000 && lastConnectionStatus == 3)
+  /*
+  2 - GOT IP - může dojít k výpadku WiFi
+  3 - TCP Connect - může dojít k výpadku tcp
+  4 - TCP not conected
+  5 - wifi not connected
+  */
+  if(millis() - statusRead < 1000 && !force && lastConnectionStatus != 5)
   {
     return;
   }
-  statusBufferLength = 0;
-  writeToStatusBuffer = true;
   this->SendCmd(F("AT+CIPSTATUS"));
-  if(WaitForTag("OK", 1000))
+  if(WaitForTag("STATUS", 1000))
   {
-    writeToStatusBuffer = false;
-    statusBuffer[statusBufferLength] = '\0';
-    sscanf(statusBuffer, "STATUS:%d", &lastConnectionStatus);
-    statusRead = millis();
-  }
-  else
-  {
-    lastConnectionStatus = 5;
+    statusBufferLength = 0;
+    writeToStatusBuffer = true;
+    if(WaitForTag("OK", 1000))
+    {
+      writeToStatusBuffer = false;
+      statusBuffer[statusBufferLength] = '\0';
+      Serial.print("Status buffer ");
+      Serial.println(statusBuffer);
+      sscanf(statusBuffer, ":%d", &lastConnectionStatus);
+      statusRead = millis();
+    }
   }
 }
 
-uint8_t EspDrv::GetConnectionStatus()
+int EspDrv::GetConnectionStatus()
 {
-  GetStatus();
+  return GetConnectionStatus(false);
+}
+int EspDrv::GetConnectionStatus(bool force)
+{
+  GetStatus(force);
   if(lastConnectionStatus == 2 || lastConnectionStatus == 3 || lastConnectionStatus == 4)
   {
     return WL_CONNECTED;
@@ -248,7 +279,11 @@ uint8_t EspDrv::GetConnectionStatus()
 
 uint8_t EspDrv::GetClientStatus()
 {
-  GetStatus();
+  return GetClientStatus(false);
+}
+uint8_t EspDrv::GetClientStatus(bool force)
+{
+  GetStatus(force);
   if(lastConnectionStatus == 3)
   {
     return CL_CONNECTED;

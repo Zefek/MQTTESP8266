@@ -40,11 +40,13 @@ class EspDrv
     void SendCmd(const __FlashStringHelper* cmd, ...);
     void TagReceived(const char* pTag);
     bool WaitForTag(const char* pTag, unsigned long timeout);
-    void GetStatus();
+    void GetStatus(bool force);
+    int GetConnectionStatus(bool force);
+    uint8_t GetClientStatus(bool force);
     uint8_t connectionState = ESP_NOTCONNECTED;
     unsigned long startDataReadMillis = 0;
     unsigned long statusRead = 0;
-    int lastConnectionStatus = 0;
+    int lastConnectionStatus = 5;
     unsigned long lastDataSend = 0;
 
   public:
@@ -56,7 +58,7 @@ class EspDrv
     void Write(uint8_t* data, uint16_t length);
     void Loop();
     void (*DataReceived) (uint8_t* buffer, int length);
-    uint8_t GetConnectionStatus();
+    int GetConnectionStatus();
     uint8_t GetClientStatus();
 };
 #endif
