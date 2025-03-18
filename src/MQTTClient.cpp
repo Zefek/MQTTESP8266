@@ -1,5 +1,5 @@
 #include "MQTTClient.h"
-#include<avr/wdt.h>
+#include <avr/wdt.h>
 
 static bool MQTTClient::pingOutstanding = false;
 static void (*MQTTClient::callback)(char* topic, uint8_t* payload, uint16_t plength) = 0;
@@ -113,8 +113,10 @@ bool MQTTClient::Login(MQTTConnectData mqttConnectData)
   }
   Write(MQTTCONNECT,this->buffer,length-MQTT_MAX_HEADER_SIZE);
   unsigned long t = millis();
-  while(!connack && t - millis() < 10000)
+  isConnected = false;
+  while(!connack && millis() - t < 10000)
   {
+    wdt_reset();
     client->Loop();
   }
   isConnected = client->GetClientStatus() == CL_CONNECTED;
@@ -174,7 +176,8 @@ void MQTTClient::Subscribe(const char *topic, uint8_t qos)
   length = WriteString((char*)topic, this->buffer,length);
   this->buffer[length++] = qos;
   Write(MQTTSUBSCRIBE|MQTTQOS1,this->buffer,length-MQTT_MAX_HEADER_SIZE);
-  while(!MQTTClient::suback)
+  unsigned long t = millis();
+  while(!MQTTClient::suback && millis() - t < 3000)
   {
     client->Loop();
   }
@@ -291,13 +294,9 @@ size_t MQTTClient::BuildHeader(uint8_t header, uint8_t* buf, uint16_t length)
 
 bool MQTTClient::Loop()
 {
-  isConnected = IsConnected();
-  if(!isConnected)
-  {
-    return isConnected;
-  }
+  IsConnected();
   unsigned long currentMillis = millis();
-  if(currentMillis - lastOutActivity >= keepAlive * 1000 && keepAlive > 0)
+  if(currentMillis - lastOutActivity >= keepAlive * 1000 && keepAlive > 0 && isConnected)
   {
     if(MQTTClient::pingOutstanding)
     {
@@ -310,14 +309,17 @@ bool MQTTClient::Loop()
     }
     else
     {
-      //Send ping request
-      MQTTClient::pingOutstanding = true;
-      lastOutActivity = currentMillis;
-      lastInActivity = currentMillis;
-      uint8_t* buffer = new uint8_t[2];
-      buffer[0] = MQTTPINGREQ;
-      buffer[1] = 0;
-      this->client->Write(buffer, 2);
+      if(isConnected)
+      {
+        //Send ping request
+        MQTTClient::pingOutstanding = true;
+        lastOutActivity = currentMillis;
+        lastInActivity = currentMillis;
+        uint8_t* buffer = new uint8_t[2];
+        buffer[0] = MQTTPINGREQ;
+        buffer[1] = 0;
+        this->client->Write(buffer, 2);
+      }
     }
   }
   this->client->Loop();
@@ -327,5 +329,6 @@ bool MQTTClient::Loop()
 bool MQTTClient::IsConnected()
 {
   uint8_t status = this->client->GetClientStatus();
-  return status == CL_CONNECTED;
+  isConnected = status == CL_CONNECTED;
+  return isConnected;
 }
