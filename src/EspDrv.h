@@ -1,11 +1,6 @@
 #ifndef __ESPDRV_H
 #define __ESPDRV_H
 
-#define ESPREADSTATE1  1
-#define ESPREADSTATE2  2
-#define ESPREADSTATE_DATA_LENGTH1 3
-#define ESPREADSTATE_DATA1 4
-#define ESPREADSTATE_DATA2 5
 #define CMD_BUFFER_SIZE 200
 
 #define ESP_NOTCONNECTED 0
@@ -20,6 +15,14 @@
 
 #include <Arduino.h>
 
+
+enum EspReadState {
+  ESPREADSTATE_IDLE = 0,          // čeká na data/odpovědi
+  ESPREADSTATE_DATA_LENGTH,       // čtení délky dat za +IPD
+  ESPREADSTATE_DATA,              // čtení samotných dat +IPD
+  ESPREADSTATE_LF                 // čeká na '\n' po '\r'
+};
+
 class EspDrv
 {
   private:
@@ -29,15 +32,16 @@ class EspDrv
     int bufLength = 0;
     int statusBufferLength = 0;
     bool writeToStatusBuffer = false;
-    uint8_t state = ESPREADSTATE1;
+    EspReadState state = EspReadState::ESPREADSTATE_IDLE;
     uint8_t *data;
     uint16_t dataLength = 0;
     uint8_t* receivedDataBuffer;
+    uint16_t receivedDataBufferSize = 0;
     uint16_t receivedDataLength;
     uint16_t dataRead = 0;
     const char* tag = "";
     void SendData();
-    void SendCmd(const __FlashStringHelper* cmd, ...);
+    bool EspDrv::SendCmd(const __FlashStringHelper* cmd, const char* tag, unsigned long timeout, ...);
     void TagReceived(const char* pTag);
     bool WaitForTag(const char* pTag, unsigned long timeout);
     void GetStatus(bool force);
