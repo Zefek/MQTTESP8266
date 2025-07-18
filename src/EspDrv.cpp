@@ -75,6 +75,7 @@ void EspDrv::Loop()
         {
           lastConnectionStatus = (int)(c - '0');
           this->state = EspReadState::IDLE;
+          continue;
         }
         else
         {
@@ -83,6 +84,7 @@ void EspDrv::Loop()
           {
             this->state = EspReadState::IDLE;
             statusCounter = 0;
+            continue;
           }
         }
       break;
