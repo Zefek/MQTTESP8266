@@ -27,7 +27,7 @@ class EspDrv
 {
   private:
     Stream *serial;
-    char ringBuffer[10];
+    char ringBuffer[16];
     uint8_t ringBufferLength = 10;
     uint8_t ringBufferTail = 0;
     EspReadState state = EspReadState::IDLE;
@@ -43,6 +43,9 @@ class EspDrv
     unsigned long lastDataSend = 0;
     unsigned long statusTimer = 0;
     uint8_t statusCounter = 0;
+    const char* expectedTag = nullptr;
+    uint8_t tagMatchIndex = 0;
+    bool statusRequest = false;
 
     void SendData(uint8_t* data, uint16_t length);
     bool SendCmd(const __FlashStringHelper* cmd, const char* tag, unsigned long timeout, ...);
@@ -53,6 +56,7 @@ class EspDrv
     uint8_t GetClientStatus(bool force);
     int CompareRingBuffer(const char* input);
     void ResetBuffer(uint8_t* buffer, uint16_t length);
+    void CheckTimeout();
 
   public:
     EspDrv(Stream *serial);

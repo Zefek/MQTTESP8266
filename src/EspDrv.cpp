@@ -2,7 +2,7 @@
 #include <Arduino.h>
 #include <avr/wdt.h>
 
-#define DEBUG 0
+#define DEBUG 1
 #define ERROR 1
 #if DEBUG
   #define PRINTLN_DEBUG(x) Serial.println(x)
@@ -18,15 +18,6 @@
   #define PRINTLN_ERROR(x)
   #define PRINT_ERROR(x)
 #endif
-
-const char* ESPTAGS[] = {
-  "OK",
-  "ERROR",
-  "FAIL",
-  "SEND OK",
-  ">",
-  "SEND FAIL"
-};
 
 EspDrv::EspDrv(Stream* serial) 
 {
@@ -54,20 +45,41 @@ void EspDrv::ResetBuffer(uint8_t* buffer, uint16_t length)
   memset(buffer, 0, length);
 }
 
+void EspDrv::CheckTimeout()
+{
+  switch(this->state)
+  {
+    case EspReadState::STATUS:
+      if(millis() - statusTimer > 1000)
+      {
+        this->state = EspReadState::IDLE;
+        statusCounter = 0;
+      }
+    break;
+    case EspReadState::DATA:
+      if(millis() - startDataReadMillis > 5000)
+      {
+        this->state = EspReadState::IDLE;
+        dataRead = 0;
+        receivedDataLength = 0;
+        ResetBuffer(receivedDataBuffer, receivedDataBufferSize);
+      }
+    break;
+  }
+}
+
 void EspDrv::Loop() 
 {
+  CheckTimeout();
   while (this->serial->available()) 
   {
+    CheckTimeout();
     int raw = this->serial->read();
     if(raw == -1)
     {
       continue;
     }
     char c = (char)raw;
-    if(c == '\r' || c == '\n')
-    {
-      continue;
-    }
     switch(this->state)
     {
       case EspReadState::STATUS:
@@ -127,7 +139,10 @@ void EspDrv::Loop()
         } 
         else 
         {
-          this->receivedDataBuffer[dataRead++] = c;
+          if(c >= '0' && c <= '9')
+          {
+            this->receivedDataBuffer[dataRead++] = c;
+          }
         }
       break;
       case EspReadState::DATA:
@@ -142,14 +157,6 @@ void EspDrv::Loop()
           ResetBuffer(receivedDataBuffer, receivedDataBufferSize);
           continue;
         }
-        if(millis() - startDataReadMillis > 5000)
-        {
-          this->state = EspReadState::IDLE;
-          dataRead = 0;
-          receivedDataLength = 0;
-          ResetBuffer(receivedDataBuffer, receivedDataBufferSize);
-          continue;
-        }
       break;
     }
     if(c >= 32 && c <= 126)
@@ -157,32 +164,34 @@ void EspDrv::Loop()
       ringBuffer[ringBufferTail] = c;
       ringBufferTail = (ringBufferTail + 1) % ringBufferLength;
     }
-    if (CompareRingBuffer("+IPD") == 0) 
+    if(this->state == EspReadState::IDLE && this->expectedTag != nullptr)
+    {
+      if (CompareRingBuffer(this->expectedTag) == 0) 
+      {
+        TagReceived(this->expectedTag);
+        this->expectedTag = nullptr;
+        this->tagMatchIndex = 0;
+        return;
+      } 
+    }
+    if (CompareRingBuffer("+IPD,") == 0) 
     {
       dataRead = 0;
       this->lastState = this->state;
       this->state = EspReadState::DATA_LENGTH;
-      ringBufferTail = (ringBufferTail - 4 + ringBufferLength) % ringBufferLength;
+      ringBufferTail = (ringBufferTail - 5 + ringBufferLength) % ringBufferLength;
     }
-    else if (CompareRingBuffer("STATUS:") == 0) 
+    else if (CompareRingBuffer("STATUS:") == 0 && this->state == EspReadState::IDLE && statusRequest) 
     {
       this->state = EspReadState::STATUS;
       statusTimer = millis();
       statusCounter = 0;
+      statusRequest = false;
     }
-    else if (CompareRingBuffer("CLOSED") == 0) 
+    else if (CompareRingBuffer("CLOSED") == 0 && this->state == EspReadState::IDLE) 
     {
       lastConnectionStatus = GetConnectionStatus(true);
       return;
-    }
-    for (int i = 0; i < 6; i++) 
-    {
-      int compare = CompareRingBuffer(ESPTAGS[i]);
-      if (compare == 0) 
-      {
-        TagReceived(ESPTAGS[i]);
-        break;
-      }
     }
   }
 }
@@ -273,11 +282,13 @@ bool EspDrv::SendCmd(const __FlashStringHelper* cmd, const char* tag, unsigned l
   {
     PRINTLN_ERROR(cmdBuf);
   }
+  this->expectedTag = nullptr;
   return tagResult;
 }
 
 bool EspDrv::WaitForTag(const char* pTag, unsigned long timeout) 
 {
+  this->expectedTag = pTag;
   unsigned long m = millis();
   unsigned long t = m;
   this->tag = "";
@@ -302,6 +313,7 @@ bool EspDrv::WaitForTag(const char* pTag, unsigned long timeout)
 void EspDrv::TagReceived(const char* pTag) 
 {
   this->tag = pTag;
+  this->expectedTag = nullptr;
 }
 
 void EspDrv::GetStatus(bool force)
@@ -316,10 +328,13 @@ void EspDrv::GetStatus(bool force)
   {
     return;
   }
+  statusRequest = true;
   this->SendCmd(F("AT+CIPSTATUS"), "OK", 1000);
+  statusRequest = false;
   if(this->state == EspReadState::STATUS)
   {
     this->state = EspReadState::IDLE;
+    statusRequest = false;
   }
   statusRead = millis();
 }
