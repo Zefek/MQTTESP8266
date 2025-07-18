@@ -37,20 +37,22 @@ class EspDrv
     uint16_t receivedDataLength;
     uint16_t dataRead = 0;
     const char* tag = "";
-    void SendData(uint8_t* data, uint16_t length);
-    bool EspDrv::SendCmd(const __FlashStringHelper* cmd, const char* tag, unsigned long timeout, ...);
-    void TagReceived(const char* pTag);
-    bool WaitForTag(const char* pTag, unsigned long timeout);
-    void GetStatus(bool force);
-    int GetConnectionStatus(bool force);
-    uint8_t GetClientStatus(bool force);
-    int CompareRingBuffer(const char* input);
     unsigned long startDataReadMillis = 0;
     unsigned long statusRead = 0;
     int lastConnectionStatus = 5;
     unsigned long lastDataSend = 0;
     unsigned long statusTimer = 0;
     uint8_t statusCounter = 0;
+
+    void SendData(uint8_t* data, uint16_t length);
+    bool SendCmd(const __FlashStringHelper* cmd, const char* tag, unsigned long timeout, ...);
+    void TagReceived(const char* pTag);
+    bool WaitForTag(const char* pTag, unsigned long timeout);
+    void GetStatus(bool force);
+    int GetConnectionStatus(bool force);
+    uint8_t GetClientStatus(bool force);
+    int CompareRingBuffer(const char* input);
+    void ResetBuffer(uint8_t* buffer, uint16_t length);
 
   public:
     EspDrv(Stream *serial);

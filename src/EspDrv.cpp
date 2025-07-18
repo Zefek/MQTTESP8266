@@ -111,7 +111,7 @@ void EspDrv::Loop()
             this->state = this->lastState;
             dataRead = 0;
             receivedDataLength = 0;
-            resetBuffer(receivedDataBuffer, receivedDataBufferSize);
+            ResetBuffer(receivedDataBuffer, receivedDataBufferSize);
             continue;
           }
           dataRead = 0;
@@ -123,7 +123,7 @@ void EspDrv::Loop()
           }
           this->state = EspReadState::DATA;
           startDataReadMillis = millis();
-          resetBuffer(receivedDataBuffer, receivedDataBufferSize);
+          ResetBuffer(receivedDataBuffer, receivedDataBufferSize);
           dataRead = 0;
         } 
         else 
@@ -140,7 +140,7 @@ void EspDrv::Loop()
           DataReceived(receivedDataBuffer, receivedDataLength);
           dataRead = 0;
           receivedDataLength = 0;
-          resetBuffer(receivedDataBuffer, receivedDataBufferSize);
+          ResetBuffer(receivedDataBuffer, receivedDataBufferSize);
           continue;
         }
         if(millis() - startDataReadMillis > 5000)
@@ -148,7 +148,7 @@ void EspDrv::Loop()
           this->state = EspReadState::IDLE;
           dataRead = 0;
           receivedDataLength = 0;
-          resetBuffer(receivedDataBuffer, receivedDataBufferSize);
+          ResetBuffer(receivedDataBuffer, receivedDataBufferSize);
           continue;
         }
       break;
