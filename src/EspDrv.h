@@ -28,7 +28,7 @@ class EspDrv
   private:
     Stream *serial;
     char ringBuffer[16];
-    uint8_t ringBufferLength = 10;
+    uint8_t ringBufferLength = 16;
     uint8_t ringBufferTail = 0;
     EspReadState state = EspReadState::IDLE;
     EspReadState lastState = EspReadState::IDLE;
