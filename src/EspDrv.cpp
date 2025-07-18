@@ -25,13 +25,36 @@ const char* ESPTAGS[] = {
   "FAIL",
   "SEND OK",
   ">",
-  "SEND FAIL",
-  "STATUS"
+  "SEND FAIL"
 };
 
 EspDrv::EspDrv(Stream* serial) 
 {
   this->serial = serial;
+}
+
+int EspDrv::CompareRingBuffer(const char* input)
+{
+  uint8_t length = strlen(input);
+  uint8_t start = (ringBufferTail - length + ringBufferLength) % ringBufferLength;
+  uint8_t i = 0;
+  for(; i < length; i++)
+  {
+    if(ringBuffer[start] != input[i])
+    {
+      return 1;
+    }
+    start = (start + 1) % ringBufferLength;
+  }
+  return 0;
+}
+
+void EspDrv::ResetBuffer(uint8_t* buffer, uint16_t length)
+{
+  for(int i = 0; i < length; i++)
+  {
+    buffer[i] = 0;
+  }
 }
 
 void EspDrv::Loop() 
@@ -44,14 +67,53 @@ void EspDrv::Loop()
       continue;
     }
     char c = (char)raw;
+    if(c == '\r' || c == '\n')
+    {
+      continue;
+    }
     switch(this->state)
     {
-      case EspReadState::ESPREADSTATE_DATA_LENGTH:
+      case EspReadState::STATUS:
+        if(c >= '0' && c <= '5')
+        {
+          lastConnectionStatus = (int)(c - '0');
+          this->state = EspReadState::IDLE;
+        }
+        else
+        {
+          statusCounter++;
+          if(statusCounter > 5 || millis() - statusTimer > 1000)
+          {
+            this->state = EspReadState::IDLE;
+            statusCounter = 0;
+          }
+        }
+      break;
+      case EspReadState::DATA_LENGTH:
+        if (dataRead > 6)
+        {
+          if(this->lastState == EspReadState::STATUS)
+          {
+            statusTimer = millis();
+            statusCounter = 0;
+          }
+          this->state = this->lastState;
+          dataRead = 0;
+          receivedDataLength = 0;
+          return;
+        }
         if (c == ':') 
         {
-          buffer[bufLength++] = '\0';
-          sscanf(buffer, "%d", &receivedDataLength);
-          bufLength = 0;
+          receivedDataBuffer[dataRead++] = '\0';
+          int result = sscanf(receivedDataBuffer, "%d", &receivedDataLength);
+          if(result != 1 || receivedDataLength <= 0 || receivedDataLength > 512)
+          {
+            this->state = this->lastState;
+            dataRead = 0;
+            receivedDataLength = 0;
+            resetBuffer(receivedDataBuffer, receivedDataBufferSize);
+            continue;
+          }
           dataRead = 0;
           if(receivedDataBufferSize < receivedDataLength)
           {
@@ -59,77 +121,69 @@ void EspDrv::Loop()
             this->receivedDataBuffer = new uint8_t[receivedDataLength];
             this->receivedDataBufferSize = receivedDataLength;
           }
-          this->state = EspReadState::ESPREADSTATE_DATA;
+          this->state = EspReadState::DATA;
           startDataReadMillis = millis();
+          resetBuffer(receivedDataBuffer, receivedDataBufferSize);
+          dataRead = 0;
         } 
         else 
         {
-          this->buffer[bufLength++] = c;
+          this->receivedDataBuffer[dataRead++] = c;
         }
       break;
-      case EspReadState::ESPREADSTATE_DATA:
+      case EspReadState::DATA:
         receivedDataBuffer[dataRead++] = (uint8_t)raw;
         startDataReadMillis = millis();
         if (dataRead == receivedDataLength) 
         {
-          this->state = EspReadState::ESPREADSTATE_IDLE;
+          this->state = EspReadState::IDLE;
           DataReceived(receivedDataBuffer, receivedDataLength);
+          dataRead = 0;
+          receivedDataLength = 0;
+          resetBuffer(receivedDataBuffer, receivedDataBufferSize);
+          continue;
         }
         if(millis() - startDataReadMillis > 5000)
         {
-          this->state = EspReadState::ESPREADSTATE_IDLE;
-        }
-      break; 
-      case EspReadState::ESPREADSTATE_LF:
-        if (c == '\n') 
-        {
-          this->state = EspReadState::ESPREADSTATE_IDLE;
-          this->bufLength = 0;
-        }
-      break;
-      default: 
-        if (c == '\r') 
-        {
-          this->state = EspReadState::ESPREADSTATE_LF;
+          this->state = EspReadState::IDLE;
+          dataRead = 0;
+          receivedDataLength = 0;
+          resetBuffer(receivedDataBuffer, receivedDataBufferSize);
           continue;
         }
-        if(bufLength == 31)
-        {
-          bufLength = 0;
-        }
-        this->buffer[bufLength++] = c;
-        this->buffer[bufLength]='\0';
-        bool found = false;
-        for (int i = 0; i < 7; i++) 
-        {
-          int compare = strncmp(ESPTAGS[i], this->buffer, strlen(ESPTAGS[i]));
-          if (compare == 0) 
-          {
-            found = true;
-            TagReceived(ESPTAGS[i]);
-            bufLength = 0;
-            break;
-          }
-        }
-        if(found)
-        {
-          break;
-        }
-        if (strncmp("+IPD,", this->buffer, strlen("+IPD,")) == 0) 
-        {
-          this->state = EspReadState::ESPREADSTATE_DATA_LENGTH;
-          bufLength = 0;
-        }
-        else if (strncmp("CLOSED", this->buffer, strlen("CLOSED")) == 0) 
-        {
-          lastConnectionStatus = GetConnectionStatus(true);
-          bufLength = 0;
-        }
-        else if(writeToStatusBuffer)
-        {
-          this->statusBuffer[statusBufferLength++] = c;
-        }
       break;
+    }
+    if(c >= 32 && c <= 126)
+    {
+      ringBuffer[ringBufferTail] = c;
+      ringBufferTail = (ringBufferTail + 1) % ringBufferLength;
+    }
+    if (CompareRingBuffer("+IPD") == 0) 
+    {
+      dataRead = 0;
+      this->lastState = this->state;
+      this->state = EspReadState::DATA_LENGTH;
+      ringBufferTail = (ringBufferTail - 4 + ringBufferLength) % ringBufferLength;
+    }
+    else if (CompareRingBuffer("STATUS:") == 0) 
+    {
+      this->state = EspReadState::STATUS;
+      statusTimer = millis();
+      statusCounter = 0;
+    }
+    else if (CompareRingBuffer("CLOSED") == 0) 
+    {
+      lastConnectionStatus = GetConnectionStatus(true);
+      return;
+    }
+    for (int i = 0; i < 6; i++) 
+    {
+      int compare = CompareRingBuffer(ESPTAGS[i]);
+      if (compare == 0) 
+      {
+        TagReceived(ESPTAGS[i]);
+        break;
+      }
     }
   }
 }
@@ -181,22 +235,20 @@ void EspDrv::Write(uint8_t* data, uint16_t length)
 {
   if(this->SendCmd(F("AT+CIPSEND=%d"), ">", 1000, length))
   {
-    this->data = data;
-    this->dataLength = length;
-    SendData();
+    SendData(data, length);
     lastDataSend = millis();
   }
 }
 
-void EspDrv::SendData() 
+void EspDrv::SendData(uint8_t* data, uint16_t length) 
 {
-  this->serial->write(this->data, this->dataLength);
+  this->serial->write(data, length);
   WaitForTag("SEND OK", 1000);
 }
 
 bool EspDrv::SendCmd(const __FlashStringHelper* cmd, const char* tag, unsigned long timeout, ...)
 {
-  if(this->state != EspReadState::ESPREADSTATE_IDLE)
+  if(this->state != EspReadState::IDLE)
   {
     return false;
   }
@@ -214,10 +266,7 @@ bool EspDrv::SendCmd(const __FlashStringHelper* cmd, const char* tag, unsigned l
       t = millis();
     }
   }
-  bool needsToReadToStatusBuffer = writeToStatusBuffer;
-  writeToStatusBuffer = false;
   Loop();
-  writeToStatusBuffer = needsToReadToStatusBuffer;
   PRINTLN_DEBUG(cmdBuf);
   this->serial->println(cmdBuf);
   bool tagResult = WaitForTag(tag, timeout);
@@ -268,20 +317,12 @@ void EspDrv::GetStatus(bool force)
   {
     return;
   }
-  if(this->SendCmd(F("AT+CIPSTATUS"), "STATUS", 1000))
+  this->SendCmd(F("AT+CIPSTATUS"), "OK", 1000);
+  if(this->state == EspReadState::STATUS)
   {
-    statusBufferLength = 0;
-    writeToStatusBuffer = true;
-    if(WaitForTag("OK", 1000))
-    {
-      writeToStatusBuffer = false;
-      statusBuffer[statusBufferLength] = '\0';
-      PRINT_DEBUG("Status buffer ");
-      PRINTLN_DEBUG(statusBuffer);
-      sscanf(statusBuffer, ":%d", &lastConnectionStatus);
-      statusRead = millis();
-    }
+    this->state = EspReadState::IDLE;
   }
+  statusRead = millis();
 }
 
 int EspDrv::GetConnectionStatus()

@@ -17,41 +17,40 @@
 
 
 enum EspReadState {
-  ESPREADSTATE_IDLE = 0,          // čeká na data/odpovědi
-  ESPREADSTATE_DATA_LENGTH,       // čtení délky dat za +IPD
-  ESPREADSTATE_DATA,              // čtení samotných dat +IPD
-  ESPREADSTATE_LF                 // čeká na '\n' po '\r'
+  IDLE = 0,          // čeká na data/odpovědi
+  DATA_LENGTH,       // čtení délky dat za +IPD
+  DATA,              // čtení samotných dat +IPD
+  STATUS
 };
 
 class EspDrv
 {
   private:
     Stream *serial;
-    char buffer[32];
-    char statusBuffer[57];
-    int bufLength = 0;
-    int statusBufferLength = 0;
-    bool writeToStatusBuffer = false;
-    EspReadState state = EspReadState::ESPREADSTATE_IDLE;
-    uint8_t *data;
-    uint16_t dataLength = 0;
+    char ringBuffer[10];
+    uint8_t ringBufferLength = 10;
+    uint8_t ringBufferTail = 0;
+    EspReadState state = EspReadState::IDLE;
+    EspReadState lastState = EspReadState::IDLE;
     uint8_t* receivedDataBuffer;
     uint16_t receivedDataBufferSize = 0;
     uint16_t receivedDataLength;
     uint16_t dataRead = 0;
     const char* tag = "";
-    void SendData();
+    void SendData(uint8_t* data, uint16_t length);
     bool EspDrv::SendCmd(const __FlashStringHelper* cmd, const char* tag, unsigned long timeout, ...);
     void TagReceived(const char* pTag);
     bool WaitForTag(const char* pTag, unsigned long timeout);
     void GetStatus(bool force);
     int GetConnectionStatus(bool force);
     uint8_t GetClientStatus(bool force);
-    uint8_t connectionState = ESP_NOTCONNECTED;
+    int CompareRingBuffer(const char* input);
     unsigned long startDataReadMillis = 0;
     unsigned long statusRead = 0;
     int lastConnectionStatus = 5;
     unsigned long lastDataSend = 0;
+    unsigned long statusTimer = 0;
+    uint8_t statusCounter = 0;
 
   public:
     EspDrv(Stream *serial);
