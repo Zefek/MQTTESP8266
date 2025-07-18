@@ -51,10 +51,7 @@ int EspDrv::CompareRingBuffer(const char* input)
 
 void EspDrv::ResetBuffer(uint8_t* buffer, uint16_t length)
 {
-  for(int i = 0; i < length; i++)
-  {
-    buffer[i] = 0;
-  }
+  memset(buffer, 0, length);
 }
 
 void EspDrv::Loop() 
