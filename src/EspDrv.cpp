@@ -1,6 +1,7 @@
 #include "EspDrv.h"
 #include <Arduino.h>
 #include <avr/wdt.h>
+#include <ctype.h>
 
 #define DEBUG 1
 #define ERROR 1
@@ -31,7 +32,7 @@ int EspDrv::CompareRingBuffer(const char* input)
   uint8_t i = 0;
   for(; i < length; i++)
   {
-    if(ringBuffer[start] != input[i])
+    if(tolower((unsigned char)ringBuffer[start]) != tolower((unsigned char)input[i]))
     {
       return 1;
     }
@@ -63,6 +64,12 @@ void EspDrv::CheckTimeout()
         dataRead = 0;
         receivedDataLength = 0;
         ResetBuffer(receivedDataBuffer, receivedDataBufferSize);
+      }
+    break;
+    case EspReadState::BUSY:
+      if(millis() - busyTime > busyTimeout)
+      {
+        this->state = EspReadState::IDLE;
       }
     break;
   }
@@ -128,14 +135,27 @@ void EspDrv::Loop()
           dataRead = 0;
           if(receivedDataBufferSize < receivedDataLength)
           {
-            delete[] this->receivedDataBuffer;
-            this->receivedDataBuffer = new uint8_t[receivedDataLength];
-            this->receivedDataBufferSize = receivedDataLength;
+            uint8_t* newBuffer = new uint8_t[receivedDataLength];
+            if(!newBuffer)
+            {
+              memAllocFailCount = memAllocFailCount == 255? memAllocFailCount : memAllocFailCount + 1;
+              this->state = EspReadState::IDLE;
+              ResetBuffer(receivedDataBuffer, receivedDataBufferSize);
+              dataRead = 0;
+              continue;
+            }
+            else
+            {
+              delete[] this->receivedDataBuffer;
+              this->receivedDataBuffer = newBuffer;
+              this->receivedDataBufferSize = receivedDataLength;
+              memAllocFailCount = 0;
+            }
+            this->state = EspReadState::DATA;
+            startDataReadMillis = millis();
+            ResetBuffer(receivedDataBuffer, receivedDataBufferSize);
+            dataRead = 0;
           }
-          this->state = EspReadState::DATA;
-          startDataReadMillis = millis();
-          ResetBuffer(receivedDataBuffer, receivedDataBufferSize);
-          dataRead = 0;
         } 
         else 
         {
@@ -150,7 +170,7 @@ void EspDrv::Loop()
         startDataReadMillis = millis();
         if (dataRead == receivedDataLength) 
         {
-          this->state = EspReadState::IDLE;
+          this->state = busyTryCount > 0? EspReadState::BUSY : EspReadState::IDLE;
           DataReceived(receivedDataBuffer, receivedDataLength);
           dataRead = 0;
           receivedDataLength = 0;
@@ -164,13 +184,19 @@ void EspDrv::Loop()
       ringBuffer[ringBufferTail] = c;
       ringBufferTail = (ringBufferTail + 1) % ringBufferLength;
     }
-    if(this->state == EspReadState::IDLE && this->expectedTag != nullptr)
+    if((this->state == EspReadState::IDLE || this->state == EspReadState::BUSY) && this->expectedTag != nullptr)
     {
       if (CompareRingBuffer(this->expectedTag) == 0) 
       {
         TagReceived(this->expectedTag);
         this->expectedTag = nullptr;
         this->tagMatchIndex = 0;
+        if(this->state == EspReadState::BUSY)
+        {
+          this->state = EspReadState::IDLE;
+          busyTimeout = 0;
+          busyTryCount = 0;
+        }
         return;
       } 
     }
@@ -181,17 +207,41 @@ void EspDrv::Loop()
       this->state = EspReadState::DATA_LENGTH;
       ringBufferTail = (ringBufferTail - 5 + ringBufferLength) % ringBufferLength;
     }
-    else if (CompareRingBuffer("STATUS:") == 0 && this->state == EspReadState::IDLE && statusRequest) 
+    else if (CompareRingBuffer("STATUS:") == 0 && (this->state == EspReadState::IDLE || this->state == EspReadState::BUSY) && statusRequest) 
     {
       this->state = EspReadState::STATUS;
       statusTimer = millis();
       statusCounter = 0;
       statusRequest = false;
+      busyTimeout = 0;
+      busyTryCount = 0;
     }
-    else if (CompareRingBuffer("CLOSED") == 0 && this->state == EspReadState::IDLE) 
+    else if (CompareRingBuffer("CLOSED") == 0 && (this->state == EspReadState::IDLE || this->state == EspReadState::BUSY)) 
     {
+      if(this->state == EspReadState::BUSY)
+      {
+        this->state = EspReadState::IDLE;
+        busyTimeout = 0;
+        busyTryCount = 0;
+      }
       lastConnectionStatus = GetConnectionStatus(true);
-      return;
+    }
+    else if (CompareRingBuffer("BUSY") == 0 && this->state == EspReadState::IDLE)
+    {
+      if(busyTryCount > 10)
+      {
+        this->state = EspReadState::IDLE;
+        busyTimeout = 0;
+        busyTryCount = 0;
+        Close();
+        continue;
+      }
+      else
+      {
+        busyTryCount++;
+        busyTimeout = min(busyTimeout * 2 + random(0, 1000), 30000);
+        busyTime = millis();
+      }
     }
   }
 }
@@ -305,6 +355,11 @@ bool EspDrv::WaitForTag(const char* pTag, unsigned long timeout)
     PRINT_ERROR(pTag);
     PRINT_ERROR(" received tag ");
     PRINTLN_ERROR(tag);
+    tagRecognitionFailCount = tagRecognitionFailCount == 255? tagRecognitionFailCount : tagRecognitionFailCount + 1;;
+  }
+  else
+  {
+    tagRecognitionFailCount = 0;
   }
   this->tag = "";
   return result;
@@ -374,4 +429,34 @@ uint8_t EspDrv::GetClientStatus(bool force)
 void EspDrv::Disconnect()
 {
   this->SendCmd(F("AT+CWQAP"), "OK", 1000);
+  lastConnectionStatus = GetConnectionStatus(true);
+}
+
+void EspDrv::Close()
+{
+  this->SendCmd(F("AT+CIPCLOSE"), "OK", 1000);
+  lastConnectionStatus = GetConnectionStatus(true);
+}
+
+void EspDrv::Reset()
+{
+  if(this->SendCmd(F("AT+RST"), "OK", 30000))
+  {
+    delay(3000);
+    if(this->SendCmd(F("ATE0"), "OK", 10000))
+    {
+      this->SendCmd(F("AT+CWMODE=1"), "OK", 1000);
+    }
+    lastConnectionStatus = GetConnectionStatus(true);
+  }
+}
+
+uint8_t EspDrv::GetMemAllocFailCount()
+{
+  return this->memAllocFailCount;
+}
+
+uint8_t EspDrv::GetTagRecognitionFailCount()
+{
+  return this->tagRecognitionFailCount;
 }

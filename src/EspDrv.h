@@ -20,14 +20,15 @@ enum EspReadState {
   IDLE = 0,          // čeká na data/odpovědi
   DATA_LENGTH,       // čtení délky dat za +IPD
   DATA,              // čtení samotných dat +IPD
-  STATUS
+  STATUS,
+  BUSY
 };
 
 class EspDrv
 {
   private:
     Stream *serial;
-    char ringBuffer[16];
+    unsigned char ringBuffer[16];
     uint8_t ringBufferLength = 16;
     uint8_t ringBufferTail = 0;
     EspReadState state = EspReadState::IDLE;
@@ -46,6 +47,11 @@ class EspDrv
     const char* expectedTag = nullptr;
     uint8_t tagMatchIndex = 0;
     bool statusRequest = false;
+    unsigned long busyTimeout = 0;
+    unsigned long busyTime = 0;
+    uint8_t busyTryCount = 0;
+    uint8_t memAllocFailCount = 0;
+    uint8_t tagRecognitionFailCount = 0;
 
     void SendData(uint8_t* data, uint16_t length);
     bool SendCmd(const __FlashStringHelper* cmd, const char* tag, unsigned long timeout, ...);
@@ -69,5 +75,9 @@ class EspDrv
     void (*DataReceived) (uint8_t* buffer, int length);
     int GetConnectionStatus();
     uint8_t GetClientStatus();
+    void Close();
+    void Reset();
+    uint8_t GetMemAllocFailCount();
+    uint8_t GetTagRecognitionFailCount();
 };
 #endif
