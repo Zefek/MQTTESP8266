@@ -69,13 +69,16 @@ class MQTTClient
     static void DataReceived(uint8_t* data, int length);
     bool Login(MQTTConnectData mQTTConnectData);
     uint16_t WriteString(const char* string, uint8_t* buf, uint16_t pos);
-    void Write(uint8_t header, uint8_t* buf, uint16_t length);
+    bool Write(uint8_t header, uint8_t* buf, uint16_t length);
     size_t BuildHeader(uint8_t header, uint8_t* buf, uint16_t length);
     static void (*callback)(char* topic, uint8_t* payload, uint16_t plength);
     void (*connected)();
     bool isConnected = false;
     static bool suback;
     static bool connack;
+    static uint16_t packetId;
+
+    void sendPubAck(uint16_t packetId);
     
   public:
     MQTTClient(EspDrv *espDriver, void(*callback)(char* topic, uint8_t* payload, uint16_t plength));
@@ -83,10 +86,10 @@ class MQTTClient
     void Disconnect();
     void Subscribe(const char* topic);
     void Subscribe(const char* topic, uint8_t qos);
-    void Publish(const char* topic, const char* payload);
-    void Publish(const char* topic, const char* payload, boolean retained);
-    void Publish(const char* topic, const uint8_t* payload, unsigned int plength);
-    void Publish(const char* topic, const uint8_t* payload, unsigned int plength, boolean retained);
+    bool Publish(const char* topic, const char* payload);
+    bool Publish(const char* topic, const char* payload, boolean retained);
+    bool Publish(const char* topic, const uint8_t* payload, unsigned int plength);
+    bool Publish(const char* topic, const uint8_t* payload, unsigned int plength, boolean retained);
     bool Loop();
     bool IsConnected();
 };
