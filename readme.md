@@ -97,5 +97,5 @@ MIT License
 
 ---
 
-**Author:** PBerek  
+**Author:** Petr B.  
 **Contributions:** Welcome via pull requests and issues!
