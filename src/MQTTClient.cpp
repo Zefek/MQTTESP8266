@@ -5,6 +5,7 @@ static bool MQTTClient::pingOutstanding = false;
 static void (*MQTTClient::callback)(char* topic, uint8_t* payload, uint16_t plength) = 0;
 static bool MQTTClient::suback = false;
 static bool MQTTClient::connack = false;
+static uint16_t MQTTClient::packetId = 0;
 
 static void MQTTClient::DataReceived(uint8_t* data, int length)
 {
@@ -20,13 +21,33 @@ static void MQTTClient::DataReceived(uint8_t* data, int length)
       MQTTClient::pingOutstanding = false;
     break;
     case MQTTPUBLISH:
-      uint8_t l = data[1];
-      uint16_t tl = (data[2]<<8)+data[3];
-      memmove(data+3, data+4, tl);
-      data[tl+3] = '\0';
-      char* topic = data+3;
-      uint8_t* payload = data+tl+4;
-      callback(topic,payload,l - tl - 2);
+    uint8_t remainingLen = data[1];  // Pozor, toto je pouze první byte Remaining Length, viz poznámka níže
+    uint16_t topicLen = (data[2] << 8) | data[3];
+
+    // Posuň topic o 1 byte dozadu a přidej nulový terminátor
+    memmove(data + 3, data + 4, topicLen);
+    data[topicLen + 3] = '\0';
+    char* topic = (char*)(data + 3);
+
+    // Zjisti QoS z fixed header (bit 1 a 2)
+    uint8_t qos = (data[0] >> 1) & 0x03;
+
+    uint8_t* payload;
+    uint16_t payloadOffset = 4 + topicLen;
+
+    if (qos > 0) {
+        // Packet Identifier je 2 bajty za topicem
+        packetId = (data[payloadOffset] << 8) | data[payloadOffset + 1];
+        payloadOffset += 2;
+    }
+
+    payload = data + payloadOffset;
+
+    // Vypočítat délku payloadu správně (nutné správně dekódovat Remaining Length)
+    uint16_t payloadLen = remainingLen - (payloadOffset - 2); // -2 protože Remaining Length počítá od data[2]
+
+    // Zavolat callback s topicem, payloadem, délkou payloadu a packetId
+    callback(topic, payload, payloadLen);
     break;
     
   }
@@ -185,29 +206,31 @@ void MQTTClient::Subscribe(const char *topic, uint8_t qos)
   client->Loop();
 }
 
-void MQTTClient::Publish(const char* topic, const char* payload) 
+bool MQTTClient::Publish(const char* topic, const char* payload) 
 {
-  Publish(topic,(const uint8_t*)payload, payload ? strnlen(payload, this->bufferSize) : 0,false);
+  return Publish(topic,(const uint8_t*)payload, payload ? strnlen(payload, this->bufferSize) : 0,false);
 }
 
-void MQTTClient::Publish(const char* topic, const char* payload, boolean retained) 
+bool MQTTClient::Publish(const char* topic, const char* payload, boolean retained) 
 {
-  Publish(topic,(const uint8_t*)payload, payload ? strnlen(payload, this->bufferSize) : 0,retained);
+  return Publish(topic,(const uint8_t*)payload, payload ? strnlen(payload, this->bufferSize) : 0,retained);
 }
 
-void MQTTClient::Publish(const char* topic, const uint8_t* payload, unsigned int plength) 
+bool MQTTClient::Publish(const char* topic, const uint8_t* payload, unsigned int plength) 
 {
-  Publish(topic, payload, plength, false);
+  return Publish(topic, payload, plength, false);
 }
 
-void MQTTClient::Publish(const char* topic, const uint8_t* payload, unsigned int plength, boolean retained)
+bool MQTTClient::Publish(const char* topic, const uint8_t* payload, unsigned int plength, boolean retained)
 {
   if(!isConnected)
   {
-    return;
+    Serial.println("Not connected");
+    return false;
   }
   if (this->bufferSize < MQTT_MAX_HEADER_SIZE + 2+strnlen(topic, this->bufferSize) + plength) 
   {
+    Serial.println("Small buffer size");
     return false;
   }
   // Leave room in the buffer for header and variable length field
@@ -227,7 +250,8 @@ void MQTTClient::Publish(const char* topic, const uint8_t* payload, unsigned int
   {
     header |= 1;
   }
-  Write(header,this->buffer,length-MQTT_MAX_HEADER_SIZE);
+  bool result = Write(header,this->buffer,length-MQTT_MAX_HEADER_SIZE);
+  return result;
 }
 
 void MQTTClient::Disconnect()
@@ -241,7 +265,7 @@ void MQTTClient::Disconnect()
   this->client->Write(buffer, 2);
 }
 
-void MQTTClient::Write(uint8_t header, uint8_t* buf, uint16_t length) 
+bool MQTTClient::Write(uint8_t header, uint8_t* buf, uint16_t length) 
 {
     uint16_t rc;
     uint8_t hlen = BuildHeader(header, buf, length);
@@ -259,9 +283,11 @@ void MQTTClient::Write(uint8_t header, uint8_t* buf, uint16_t length)
       bytesRemaining -= rc;
       writeBuf += rc;
     }
+    return true;
 #else
-    client->Write(buf+(MQTT_MAX_HEADER_SIZE-hlen),length+hlen);
+    bool result = client->Write(buf+(MQTT_MAX_HEADER_SIZE-hlen),length+hlen);
     lastOutActivity = millis();
+    return result;
 #endif
 }
 
@@ -292,19 +318,31 @@ size_t MQTTClient::BuildHeader(uint8_t header, uint8_t* buf, uint16_t length)
   return llen+1; // Full header size is variable length bit plus the 1-byte fixed header
 }
 
+void MQTTClient::sendPubAck(uint16_t packetId) 
+{
+    uint8_t pubackPacket[4];
+    pubackPacket[0] = 0x40;                // PUBACK packet type + flags
+    pubackPacket[1] = 0x02;                // Remaining length = 2
+    pubackPacket[2] = (packetId >> 8) & 0xFF;  // Packet ID MSB
+    pubackPacket[3] = packetId & 0xFF;
+    client->Write(pubackPacket, 4);
+}
+
 bool MQTTClient::Loop()
 {
   IsConnected();
   unsigned long currentMillis = millis();
+  if(packetId > 0)
+  {
+    sendPubAck(packetId);
+    packetId = 0;
+  }
   if(currentMillis - lastOutActivity >= keepAlive * 1000 && keepAlive > 0 && isConnected)
   {
     if(MQTTClient::pingOutstanding)
     {
       isConnected = false;
-      uint8_t* buffer = new uint8_t[2];
-      buffer[0] = MQTTDISCONNECT;
-      buffer[1] = 0;
-      this->client->Write(buffer, 2);
+      this->Disconnect();
       return isConnected;
     }
     else
@@ -315,7 +353,6 @@ bool MQTTClient::Loop()
         MQTTClient::pingOutstanding = true;
         lastOutActivity = currentMillis;
         lastInActivity = currentMillis;
-        uint8_t* buffer = new uint8_t[2];
         buffer[0] = MQTTPINGREQ;
         buffer[1] = 0;
         this->client->Write(buffer, 2);

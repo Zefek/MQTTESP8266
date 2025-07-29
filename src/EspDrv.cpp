@@ -1,19 +1,36 @@
 #include "EspDrv.h"
 #include <Arduino.h>
 #include <avr/wdt.h>
+#include <ctype.h>
 
-#define DEBUG 1
+#define TRACE 0
+#define DEBUG 0
+#define WARNING 1
 #define ERROR 1
-#if DEBUG
-  #define PRINTLN_DEBUG(x) Serial.println(x)
-  #define PRINT_DEBUG(x) Serial.print(x)
+#if TRACE
+  #define PRINTLN_TRACE(x) do { Serial.print(F("TRACE")); Serial.println(x); } while(0);
+  #define PRINT_TRACE(x) do { Serial.print(F("TRACE")); Serial.print(x); } while(0)
 #else
-  #define PRINTLN_DEBUG(x)
+  #define PRINTLN_TRACE(x)
+  #define PRINT_TRACE(x)
+#endif
+#if DEBUG
+  #define PRINTLN_DEBUG(x) do { Serial.print(F("DEBUG:"));  Serial.println(x); } while(0)
+  #define PRINT_DEBUG(x) do { Serial.print(F("DEBUG:")); Serial.print(x); } while(0)
+#else
+  #define PRINTLN_DEBUG(x) 
   #define PRINT_DEBUG(x)
 #endif
+#if WARNING
+  #define PRINTLN_WARNING(x) do { Serial.print(F("WARN:")); Serial.println(x); } while(0)
+  #define PRINT_WARNING(x) do { Serial.print(F("WARN:")); Serial.print(x); } while(0)
+#else
+  #define PRINTLN_WARNING(x)
+  #define PRINT_WARNING(x)
+#endif
 #if ERROR
-  #define PRINTLN_ERROR(x) Serial.println(x)
-  #define PRINT_ERROR(x) Serial.print(x)
+  #define PRINTLN_ERROR(x) do{ Serial.print(F("ERROR:")); Serial.println(x); } while(0)
+  #define PRINT_ERROR(x) do { Serial.print(F("ERROR:")); Serial.print(x); } while(0)
 #else
   #define PRINTLN_ERROR(x)
   #define PRINT_ERROR(x)
@@ -31,7 +48,7 @@ int EspDrv::CompareRingBuffer(const char* input)
   uint8_t i = 0;
   for(; i < length; i++)
   {
-    if(ringBuffer[start] != input[i])
+    if(tolower((unsigned char)ringBuffer[start]) != tolower((unsigned char)input[i]))
     {
       return 1;
     }
@@ -52,17 +69,27 @@ void EspDrv::CheckTimeout()
     case EspReadState::STATUS:
       if(millis() - statusTimer > 1000)
       {
+        PRINTLN_WARNING(F("Status timout expired."));
         this->state = EspReadState::IDLE;
         statusCounter = 0;
       }
     break;
     case EspReadState::DATA:
-      if(millis() - startDataReadMillis > 5000)
+    case EspReadState::DATA_LENGTH:
+      if(millis() - startDataReadMillis > 3000)
       {
+        PRINTLN_WARNING(F("Data timout expired."));
         this->state = EspReadState::IDLE;
         dataRead = 0;
         receivedDataLength = 0;
         ResetBuffer(receivedDataBuffer, receivedDataBufferSize);
+      }
+    break;
+    case EspReadState::BUSY:
+      if(millis() - busyTime > busyTimeout)
+      {
+        PRINTLN_WARNING(F("Busy timout expired."));
+        this->state = EspReadState::IDLE;
       }
     break;
   }
@@ -79,6 +106,18 @@ void EspDrv::Loop()
     {
       continue;
     }
+    #if TRACE
+    if((raw >= 32 && raw <= 126) || raw == 13 || raw == 10)
+    {
+      Serial.print((char)raw);
+    }
+    else
+    {
+      Serial.print("|");
+      Serial.print(raw);
+      Serial.print("|");
+    }
+    #endif
     char c = (char)raw;
     switch(this->state)
     {
@@ -86,6 +125,8 @@ void EspDrv::Loop()
         if(c >= '0' && c <= '5')
         {
           lastConnectionStatus = (int)(c - '0');
+          PRINT_DEBUG("Connection status ");
+          PRINTLN_DEBUG(lastConnectionStatus);
           this->state = EspReadState::IDLE;
           continue;
         }
@@ -94,48 +135,73 @@ void EspDrv::Loop()
           statusCounter++;
           if(statusCounter > 5 || millis() - statusTimer > 1000)
           {
-            this->state = EspReadState::IDLE;
             statusCounter = 0;
+            this->state = EspReadState::IDLE;
             continue;
           }
         }
       break;
       case EspReadState::DATA_LENGTH:
+        startDataReadMillis = millis();
         if (dataRead > 6)
         {
+          startDataReadMillis = millis();
           if(this->lastState == EspReadState::STATUS)
           {
             statusTimer = millis();
             statusCounter = 0;
           }
-          this->state = this->lastState;
           dataRead = 0;
           receivedDataLength = 0;
+          this->state = this->lastState;
           return;
         }
         if (c == ':') 
         {
           receivedDataBuffer[dataRead++] = '\0';
           int result = sscanf(receivedDataBuffer, "%d", &receivedDataLength);
+          PRINT_DEBUG("Data length ");
+          PRINTLN_DEBUG(receivedDataLength);
           if(result != 1 || receivedDataLength <= 0 || receivedDataLength > 512)
           {
-            this->state = this->lastState;
             dataRead = 0;
             receivedDataLength = 0;
             ResetBuffer(receivedDataBuffer, receivedDataBufferSize);
+            this->state = this->lastState;
             continue;
           }
           dataRead = 0;
           if(receivedDataBufferSize < receivedDataLength)
           {
-            delete[] this->receivedDataBuffer;
-            this->receivedDataBuffer = new uint8_t[receivedDataLength];
-            this->receivedDataBufferSize = receivedDataLength;
+            PRINT_DEBUG(F("Need data buffer allocation. Current size: "));
+            PRINT_DEBUG(receivedDataBufferSize);
+            PRINT_DEBUG(F(". New size: "));
+            PRINTLN_DEBUG(receivedDataLength);
+            uint8_t* newBuffer = new uint8_t[receivedDataLength];
+            if(!newBuffer)
+            {
+              PRINT_ERROR(F("Error in data buffer allocation. Expected size: "));
+              PRINT_ERROR(receivedDataLength);
+              PRINT_ERROR(F(". Current size: "));
+              PRINTLN_ERROR(receivedDataBufferSize);
+              memAllocFailCount = memAllocFailCount == 255? memAllocFailCount : memAllocFailCount + 1;              
+              ResetBuffer(receivedDataBuffer, receivedDataBufferSize);
+              dataRead = 0;
+              this->state = EspReadState::IDLE;
+              continue;
+            }
+            else
+            {
+              delete[] this->receivedDataBuffer;
+              this->receivedDataBuffer = newBuffer;
+              this->receivedDataBufferSize = receivedDataLength;
+              memAllocFailCount = 0;
+            }
           }
-          this->state = EspReadState::DATA;
           startDataReadMillis = millis();
           ResetBuffer(receivedDataBuffer, receivedDataBufferSize);
           dataRead = 0;
+          this->state = EspReadState::DATA;
         } 
         else 
         {
@@ -150,13 +216,19 @@ void EspDrv::Loop()
         startDataReadMillis = millis();
         if (dataRead == receivedDataLength) 
         {
-          this->state = EspReadState::IDLE;
+          PRINTLN_DEBUG(F("Read all received data."));
           DataReceived(receivedDataBuffer, receivedDataLength);
           dataRead = 0;
           receivedDataLength = 0;
           ResetBuffer(receivedDataBuffer, receivedDataBufferSize);
+          statusRead = millis();
+          this->state = busyTryCount > 0? EspReadState::BUSY : EspReadState::IDLE;
           continue;
         }
+        PRINT_TRACE(F("Read "));
+        PRINT_TRACE(dataRead);
+        PRINT_TRACE(F("/"));
+        PRINTLN_TRACE(receivedDataLength);
       break;
     }
     if(c >= 32 && c <= 126)
@@ -164,34 +236,71 @@ void EspDrv::Loop()
       ringBuffer[ringBufferTail] = c;
       ringBufferTail = (ringBufferTail + 1) % ringBufferLength;
     }
-    if(this->state == EspReadState::IDLE && this->expectedTag != nullptr)
+    if((this->state == EspReadState::IDLE || this->state == EspReadState::BUSY) && this->expectedTag != nullptr)
     {
       if (CompareRingBuffer(this->expectedTag) == 0) 
       {
+        PRINT_DEBUG(F("Tag recognized "));
+        PRINTLN_DEBUG(this->expectedTag);
         TagReceived(this->expectedTag);
         this->expectedTag = nullptr;
-        this->tagMatchIndex = 0;
+        if(this->state == EspReadState::BUSY)
+        {
+          busyTimeout = 0;
+          busyTryCount = 0;
+          this->state = EspReadState::IDLE;
+        }
         return;
       } 
     }
     if (CompareRingBuffer("+IPD,") == 0) 
     {
+      PRINTLN_DEBUG(F("+IPD"));
+      ringBufferTail = (ringBufferTail - 5 + ringBufferLength) % ringBufferLength;
       dataRead = 0;
+      startDataReadMillis = millis();
       this->lastState = this->state;
       this->state = EspReadState::DATA_LENGTH;
-      ringBufferTail = (ringBufferTail - 5 + ringBufferLength) % ringBufferLength;
     }
-    else if (CompareRingBuffer("STATUS:") == 0 && this->state == EspReadState::IDLE && statusRequest) 
+    else if (CompareRingBuffer("STATUS:") == 0 && (this->state == EspReadState::IDLE || this->state == EspReadState::BUSY) && !statusFound) 
     {
-      this->state = EspReadState::STATUS;
+      PRINTLN_DEBUG(F("STATUS"));
       statusTimer = millis();
       statusCounter = 0;
-      statusRequest = false;
+      statusFound = true;
+      busyTimeout = 0;
+      busyTryCount = 0;
+      this->state = EspReadState::STATUS;
     }
-    else if (CompareRingBuffer("CLOSED") == 0 && this->state == EspReadState::IDLE) 
+    else if (CompareRingBuffer("CLOSED") == 0 && (this->state == EspReadState::IDLE || this->state == EspReadState::BUSY)) 
     {
-      lastConnectionStatus = GetConnectionStatus(true);
-      return;
+      PRINTLN_DEBUG(F("CLOSED"));
+      if(this->state == EspReadState::BUSY)
+      {
+        busyTimeout = 0;
+        busyTryCount = 0;
+        this->state = EspReadState::IDLE;
+      }
+      GetConnectionStatus(true);
+    }
+    else if (CompareRingBuffer("BUSY") == 0 && this->state == EspReadState::IDLE)
+    {
+      PRINTLN_WARNING(F("BUSY"));
+      if(busyTryCount > 10)
+      {
+        busyTimeout = 0;
+        busyTryCount = 0;
+        this->state = EspReadState::IDLE;
+        Close();
+        continue;
+      }
+      else
+      {
+        busyTryCount++;
+        busyTimeout = min(busyTimeout * 2 + random(200, 1000), 5000);
+        busyTime = millis();
+        this->state = EspReadState::BUSY;
+      }
     }
   }
 }
@@ -207,7 +316,7 @@ void EspDrv::Init(uint8_t receivedBufferSize)
       {
         this->SendCmd(F("AT+CWMODE=1"), "OK", 1000);
       }
-      lastConnectionStatus = GetConnectionStatus(true);
+      GetConnectionStatus(true);
     }
   }
   this->receivedDataBuffer = new uint8_t[receivedBufferSize];
@@ -222,14 +331,15 @@ int EspDrv::Connect(const char* ssid, const char* password)
     if(this->SendCmd(F("AT+CIPMUX=0"), "OK", 10000))
     {
       delay(100);
-      lastConnectionStatus = GetConnectionStatus(true);
-      return lastConnectionStatus == WL_CONNECTED;
+      int status = GetConnectionStatus(true);
+      return status == WL_CONNECTED;
     }
   }
   return WL_DISCONNECTED;
 }
 
-int EspDrv::TCPConnect(const char* url, int port) {
+int EspDrv::TCPConnect(const char* url, int port)
+{
   if(this->SendCmd(F("AT+CIPSTART=\"TCP\",\"%s\",%d"), "OK", 10000, url, port))
   {
     delay(100);
@@ -239,42 +349,44 @@ int EspDrv::TCPConnect(const char* url, int port) {
   return 0;
 }
 
-void EspDrv::Write(uint8_t* data, uint16_t length) 
+bool EspDrv::Write(uint8_t* data, uint16_t length) 
 {
+  bool result = false;
   if(this->SendCmd(F("AT+CIPSEND=%d"), ">", 1000, length))
   {
-    SendData(data, length);
+    result = SendData(data, length);
     lastDataSend = millis();
   }
+  if(result)
+  {
+    statusRead = millis();
+  }
+  return result;
 }
 
-void EspDrv::SendData(uint8_t* data, uint16_t length) 
+void EspDrv::WaitUntilReady()
 {
+  do
+  {
+    Loop();
+  } while(this->state != EspReadState::IDLE || millis() - lastDataSend < 1000);
+}
+
+bool EspDrv::SendData(uint8_t* data, uint16_t length) 
+{
+  WaitUntilReady();
   this->serial->write(data, length);
-  WaitForTag("SEND OK", 1000);
+  return WaitForTag("SEND OK", 1000);
 }
 
 bool EspDrv::SendCmd(const __FlashStringHelper* cmd, const char* tag, unsigned long timeout, ...)
 {
-  if(this->state != EspReadState::IDLE)
-  {
-    return false;
-  }
   char cmdBuf[CMD_BUFFER_SIZE];
   va_list args;
   va_start(args, cmd);
   vsnprintf_P(cmdBuf, CMD_BUFFER_SIZE, (char*)cmd, args);
   va_end(args);
-  unsigned int t = millis();
-  if(t - lastDataSend < 1000)
-  {
-    while(t - lastDataSend < 1000)
-    {
-      this->Loop();
-      t = millis();
-    }
-  }
-  Loop();
+  WaitUntilReady();
   PRINTLN_DEBUG(cmdBuf);
   this->serial->println(cmdBuf);
   bool tagResult = WaitForTag(tag, timeout);
@@ -305,6 +417,11 @@ bool EspDrv::WaitForTag(const char* pTag, unsigned long timeout)
     PRINT_ERROR(pTag);
     PRINT_ERROR(" received tag ");
     PRINTLN_ERROR(tag);
+    tagRecognitionFailCount = tagRecognitionFailCount == 255? tagRecognitionFailCount : tagRecognitionFailCount + 1;;
+  }
+  else
+  {
+    tagRecognitionFailCount = 0;
   }
   this->tag = "";
   return result;
@@ -328,13 +445,12 @@ void EspDrv::GetStatus(bool force)
   {
     return;
   }
-  statusRequest = true;
+
   this->SendCmd(F("AT+CIPSTATUS"), "OK", 1000);
-  statusRequest = false;
+  statusFound = false;
   if(this->state == EspReadState::STATUS)
   {
     this->state = EspReadState::IDLE;
-    statusRequest = false;
   }
   statusRead = millis();
 }
@@ -374,4 +490,34 @@ uint8_t EspDrv::GetClientStatus(bool force)
 void EspDrv::Disconnect()
 {
   this->SendCmd(F("AT+CWQAP"), "OK", 1000);
+  lastConnectionStatus = GetConnectionStatus(true);
+}
+
+void EspDrv::Close()
+{
+  this->SendCmd(F("AT+CIPCLOSE"), "OK", 1000);
+  lastConnectionStatus = GetConnectionStatus(true);
+}
+
+void EspDrv::Reset()
+{
+  if(this->SendCmd(F("AT+RST"), "OK", 30000))
+  {
+    delay(3000);
+    if(this->SendCmd(F("ATE0"), "OK", 10000))
+    {
+      this->SendCmd(F("AT+CWMODE=1"), "OK", 1000);
+    }
+    lastConnectionStatus = GetConnectionStatus(true);
+  }
+}
+
+uint8_t EspDrv::GetMemAllocFailCount()
+{
+  return this->memAllocFailCount;
+}
+
+uint8_t EspDrv::GetTagRecognitionFailCount()
+{
+  return this->tagRecognitionFailCount;
 }
