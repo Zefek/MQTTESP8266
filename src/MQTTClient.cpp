@@ -5,7 +5,12 @@ static bool MQTTClient::pingOutstanding = false;
 static void (*MQTTClient::callback)(char* topic, uint8_t* payload, uint16_t plength) = 0;
 static bool MQTTClient::suback = false;
 static bool MQTTClient::connack = false;
-static uint16_t MQTTClient::packetId = 0;
+static uint8_t MQTTClient::qosBufferHead = 0;
+static uint8_t MQTTClient::qosBufferTail = 0;
+static uint8_t MQTTClient::qosBufferCount = 0;
+static bool MQTTClient::fullQoSBuffer = false;
+static uint8_t MQTTClient::qosBufferLength = 16;
+static uint16_t* MQTTClient::qosBufferPacketIds;
 
 static void MQTTClient::DataReceived(uint8_t* data, int length)
 {
@@ -35,10 +40,19 @@ static void MQTTClient::DataReceived(uint8_t* data, int length)
     uint8_t* payload;
     uint16_t payloadOffset = 4 + topicLen;
 
-    if (qos > 0) {
-        // Packet Identifier je 2 bajty za topicem
-        packetId = (data[payloadOffset] << 8) | data[payloadOffset + 1];
-        payloadOffset += 2;
+    if (qos > 0) 
+    {
+      // Packet Identifier je 2 bajty za topicem
+      uint16_t packetId = (data[payloadOffset] << 8) | data[payloadOffset + 1];
+      if(qosBufferHead == qosBufferTail && qosBufferCount != 0)
+      {
+        fullQoSBuffer = true;
+        return;
+      }
+      qosBufferPacketIds[qosBufferHead] = packetId;
+      qosBufferHead = (qosBufferHead + 1) % 10;
+      qosBufferCount++;
+      payloadOffset += 2;
     }
 
     payload = data + payloadOffset;
@@ -53,12 +67,17 @@ static void MQTTClient::DataReceived(uint8_t* data, int length)
   }
 }
 
-MQTTClient::MQTTClient(EspDrv *espDriver, void(*callback)(char* topic, uint8_t* payload, uint16_t plength))
+MQTTClient::MQTTClient(EspDrv *espDriver, void(*callback)(char* topic, uint8_t* payload, uint16_t plength), uint8_t pQosBufferLength = 16)
 {
   this->client = espDriver;
   this->client->DataReceived = &DataReceived;
   this->buffer = new uint8_t[bufferSize];
   this->callback = callback;
+  fullQoSBuffer = false;
+  qosBufferHead = qosBufferTail = 0;
+  qosBufferCount = 0;
+  qosBufferPacketIds = new uint16_t[pQosBufferLength];
+  qosBufferLength = pQosBufferLength;
 }
 
 bool MQTTClient::Connect(MQTTConnectData mqttConnectData)
@@ -330,12 +349,20 @@ void MQTTClient::sendPubAck(uint16_t packetId)
 
 bool MQTTClient::Loop()
 {
-  IsConnected();
   unsigned long currentMillis = millis();
-  if(packetId > 0)
+  IsConnected();
+  if(isConnected)
   {
-    sendPubAck(packetId);
-    packetId = 0;
+    while(qosBufferHead != qosBufferTail)
+    { 
+      sendPubAck(qosBufferPacketIds[qosBufferTail]);
+      qosBufferTail = (qosBufferTail + 1) % 10;
+      qosBufferCount--;
+    }
+    if(fullQoSBuffer)
+    {
+      this->client->Close();
+    }
   }
   if(currentMillis - lastOutActivity >= keepAlive * 1000 && keepAlive > 0 && isConnected)
   {

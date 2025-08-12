@@ -76,12 +76,17 @@ class MQTTClient
     bool isConnected = false;
     static bool suback;
     static bool connack;
-    static uint16_t packetId;
+    static uint16_t* qosBufferPacketIds;
+    static uint8_t qosBufferHead;
+    static uint8_t qosBufferTail;
+    static uint8_t qosBufferCount;
+    static bool fullQoSBuffer;
+    static uint8_t qosBufferLength;
 
     void sendPubAck(uint16_t packetId);
     
   public:
-    MQTTClient(EspDrv *espDriver, void(*callback)(char* topic, uint8_t* payload, uint16_t plength));
+    MQTTClient(EspDrv *espDriver, void(*callback)(char* topic, uint8_t* payload, uint16_t plength), uint8_t pQosBufferLength = 16);
     bool Connect(MQTTConnectData mQTTConnectData);
     void Disconnect();
     void Subscribe(const char* topic);
