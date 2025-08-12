@@ -84,6 +84,9 @@ bool MQTTClient::Connect(MQTTConnectData mqttConnectData)
 {
   this->client->TCPConnect(mqttConnectData.url, mqttConnectData.port);
   this->keepAlive = mqttConnectData.keepAlive;
+  fullQoSBuffer = false;
+  qosBufferHead = qosBufferTail = 0;
+  qosBufferCount = 0;
   return this->Login(mqttConnectData);
 }
 
