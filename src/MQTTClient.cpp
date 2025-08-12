@@ -50,7 +50,7 @@ static void MQTTClient::DataReceived(uint8_t* data, int length)
         return;
       }
       qosBufferPacketIds[qosBufferHead] = packetId;
-      qosBufferHead = (qosBufferHead + 1) % 10;
+      qosBufferHead = (qosBufferHead + 1) % qosBufferLength;
       qosBufferCount++;
       payloadOffset += 2;
     }
@@ -359,7 +359,7 @@ bool MQTTClient::Loop()
     while(qosBufferHead != qosBufferTail)
     { 
       sendPubAck(qosBufferPacketIds[qosBufferTail]);
-      qosBufferTail = (qosBufferTail + 1) % 10;
+      qosBufferTail = (qosBufferTail + 1) % qosBufferLength;
       qosBufferCount--;
     }
     if(fullQoSBuffer)
