@@ -79,5 +79,6 @@ class EspDrv
     void Reset();
     uint8_t GetMemAllocFailCount();
     uint8_t GetTagRecognitionFailCount();
+    void (*DataTimeout)();
 };
 #endif

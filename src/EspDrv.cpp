@@ -83,6 +83,7 @@ void EspDrv::CheckTimeout()
         dataRead = 0;
         receivedDataLength = 0;
         ResetBuffer(receivedDataBuffer, receivedDataBufferSize);
+        this->DataTimeout();
       }
     break;
     case EspReadState::BUSY:
