@@ -1,0 +1,34 @@
+name: Arduino Library Release
+
+on:
+  release:
+    types: [published]
+
+env:
+  LIB_NAME: MQTTESP8266
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Create library folder
+        run: |
+          mkdir "$LIB_NAME"
+          rsync -av \
+            --exclude='.git*' \
+            --exclude='.github' \
+            ./ "$LIB_NAME/"
+
+      - name: Create ZIP archive
+        run: |
+          zip -r "$LIB_NAME.zip" "$LIB_NAME"
+
+      - name: Upload ZIP to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ env.LIB_NAME }}.zip
