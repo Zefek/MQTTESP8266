@@ -34,30 +34,3 @@ jobs:
         if: github.event_name == 'pull_request'
         run: |
           arduino-cli compile --fqbn arduino:avr:mega ./src
-          
-      - name: Get previous tag and increment
-        if: github.event_name != 'pull_request'
-        id: get_tag
-        run: |
-          LAST_TAG=$(git describe --tags --abbrev=0)
-          
-          # Pokud není žádný tag, nastavíme počáteční číslo
-          if [ -z "$LAST_TAG" ]; then
-            BUILD_NUMBER=1
-          else
-            BUILD_NUMBER=$(echo $LAST_TAG | sed 's/[^0-9]*//g')
-            BUILD_NUMBER=$((BUILD_NUMBER + 1))
-          fi
-
-          # Získáme název větve
-          BRANCH_NAME=$(echo ${GITHUB_REF#refs/heads/} | sed 's/\//-/g')  # nahradíme / znak pomlčkami
-
-          BUILD_TAG="${BRANCH_NAME}-${BUILD_NUMBER}"
-          
-          echo "BUILD_TAG=${BUILD_TAG}" >> $GITHUB_ENV
-          
-      - name: Create and push tag
-        if: github.event_name != 'pull_request'  # Tento krok se provede pouze při push mimo PR
-        run: |
-          git tag $BUILD_TAG
-          git push origin $BUILD_TAG
