@@ -78,7 +78,7 @@ class MQTTClient
     bool Write(uint8_t header, uint8_t* buf, uint16_t length);
     size_t BuildHeader(uint8_t header, uint8_t* buf, uint16_t length);
     static void (*callback)(char* topic, uint8_t* payload, uint16_t plength);
-    void (*connected)();
+    void (*connected)() = nullptr;
     bool isConnected = false;
     static bool suback;
     static bool connack;
