@@ -80,7 +80,7 @@ MQTTClient::MQTTClient(EspDrv *espDriver, void(*callback)(char* topic, uint8_t* 
   qosBufferLength = pQosBufferLength;
 }
 
-bool MQTTClient::Connect(MQTTConnectData mqttConnectData)
+bool MQTTClient::Connect(const MQTTConnectData& mqttConnectData)
 {
   this->client->TCPConnect(mqttConnectData.url, mqttConnectData.port);
   this->keepAlive = mqttConnectData.keepAlive;
@@ -90,22 +90,17 @@ bool MQTTClient::Connect(MQTTConnectData mqttConnectData)
   return this->Login(mqttConnectData);
 }
 
-bool MQTTClient::Login(MQTTConnectData mqttConnectData)
+bool MQTTClient::Login(const MQTTConnectData& mqttConnectData)
 {
-  connack = false;
-  uint16_t length = MQTT_MAX_HEADER_SIZE;
-  unsigned int j;
-
 #if MQTT_VERSION == MQTT_VERSION_3_1
-  uint8_t d[9] = {0x00,0x06,'M','Q','I','s','d','p', MQTT_VERSION};
-#define MQTT_HEADER_VERSION_LENGTH 9
+  const uint8_t MQTT_HEADER[MQTT_HEADER_VERSION_LENGTH] = {0x00,0x06,'M','Q','I','s','d','p', MQTT_VERSION};
 #elif MQTT_VERSION == MQTT_VERSION_3_1_1
-  uint8_t d[7] = {0x00,0x04,'M','Q','T','T',MQTT_VERSION};
-#define MQTT_HEADER_VERSION_LENGTH 7
+  const uint8_t MQTT_HEADER[MQTT_HEADER_VERSION_LENGTH] = {0x00,0x04,'M','Q','T','T',MQTT_VERSION};
 #endif
-  for (j = 0;j<MQTT_HEADER_VERSION_LENGTH;j++) 
+  uint16_t length = MQTT_MAX_HEADER_SIZE;
+  for (uint8_t j = 0; j < MQTT_HEADER_VERSION_LENGTH; j++) 
   {
-    this->buffer[length++] = d[j];
+    this->buffer[length++] = MQTT_HEADER[j];
   }
 
   uint8_t v;
@@ -157,6 +152,7 @@ bool MQTTClient::Login(MQTTConnectData mqttConnectData)
   Write(MQTTCONNECT,this->buffer,length-MQTT_MAX_HEADER_SIZE);
   unsigned long t = millis();
   isConnected = false;
+  connack = false;
   while(!connack && millis() - t < 10000)
   {
     wdt_reset();
@@ -289,18 +285,16 @@ void MQTTClient::Disconnect()
 
 bool MQTTClient::Write(uint8_t header, uint8_t* buf, uint16_t length) 
 {
-    uint16_t rc;
     uint8_t hlen = BuildHeader(header, buf, length);
 
 #ifdef MQTT_MAX_TRANSFER_SIZE
     uint8_t* writeBuf = buf+(MQTT_MAX_HEADER_SIZE-hlen);
     uint16_t bytesRemaining = length+hlen;  //Match the length type
-    uint8_t bytesToWrite;
     boolean result = true;
     while((bytesRemaining > 0) && result) 
     {
-      bytesToWrite = (bytesRemaining > MQTT_MAX_TRANSFER_SIZE)?MQTT_MAX_TRANSFER_SIZE:bytesRemaining;
-      client->Write(writeBuf,bytesToWrite);
+      uint8_t bytesToWrite = (bytesRemaining > MQTT_MAX_TRANSFER_SIZE) ? MQTT_MAX_TRANSFER_SIZE : bytesRemaining;
+      uint16_t rc = client->Write(writeBuf,bytesToWrite);
       result = (rc == bytesToWrite);
       bytesRemaining -= rc;
       writeBuf += rc;
@@ -317,12 +311,11 @@ size_t MQTTClient::BuildHeader(uint8_t header, uint8_t* buf, uint16_t length)
 {
   uint8_t lenBuf[4];
   uint8_t llen = 0;
-  uint8_t digit;
   uint8_t pos = 0;
   uint16_t len = length;
   do 
   {
-    digit = len  & 127; //digit = len %128
+    uint8_t digit = len & 127; //digit = len %128
     len >>= 7; //len = len / 128
     if (len > 0) 
     {
@@ -377,16 +370,13 @@ bool MQTTClient::Loop()
     }
     else
     {
-      if(isConnected)
-      {
-        //Send ping request
-        MQTTClient::pingOutstanding = true;
-        lastOutActivity = currentMillis;
-        lastInActivity = currentMillis;
-        buffer[0] = MQTTPINGREQ;
-        buffer[1] = 0;
-        this->client->Write(buffer, 2);
-      }
+      //Send ping request
+      MQTTClient::pingOutstanding = true;
+      lastOutActivity = currentMillis;
+      lastInActivity = currentMillis;
+      buffer[0] = MQTTPINGREQ;
+      buffer[1] = 0;
+      this->client->Write(buffer, 2);
     }
   }
   this->client->Loop();
