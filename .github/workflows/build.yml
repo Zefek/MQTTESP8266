@@ -34,7 +34,12 @@ jobs:
       - name: Install required board core
         if: github.event_name == 'pull_request'
         run: arduino-cli core install arduino:avr  # např. pro Arduino Uno
-
+      
+      - name: Static analysis
+        run: |
+          sudo apt-get install -y cppcheck
+          cppcheck --enable=all --language=c++ --suppress=missingIncludeSystem --suppress=unusedFunction --suppress=unusedStructMember --suppress=noExplicitConstructor --suppress=noCopyConstructor --suppress=noOperatorEq --suppress=cstyleCast --suppress=constParameterCallback --suppress=constParameterPointer --suppress=constVariablePointer --suppress=unsignedLessThanZero --suppress=unsignedPositive --suppress=checkersReport --suppress=noDestructor --suppress=unmatchedSuppression --error-exitcode=1 src/
+      
       - name: Compile Arduino project
         if: github.event_name == 'pull_request'
         run: |

@@ -40,6 +40,12 @@
 #define MQTTQOS1        (1 << 1)
 #define MQTTQOS2        (2 << 1)
 
+#if MQTT_VERSION == MQTT_VERSION_3_1
+  #define MQTT_HEADER_VERSION_LENGTH 9
+#elif MQTT_VERSION == MQTT_VERSION_3_1_1
+  #define MQTT_HEADER_VERSION_LENGTH 7
+#endif
+
 struct MQTTConnectData
 {
   const char* url;
@@ -62,17 +68,17 @@ class MQTTClient
     uint8_t* buffer;
     uint16_t bufferSize = 256;
     uint16_t keepAlive = 30;
-    unsigned long lastOutActivity;
-    unsigned long lastInActivity;
+    unsigned long lastOutActivity = 0;
+    unsigned long lastInActivity = 0;
     static bool pingOutstanding;
-    uint32_t nextMsgId;
+    uint32_t nextMsgId = 0;
     static void DataReceived(uint8_t* data, int length);
-    bool Login(MQTTConnectData mQTTConnectData);
+    bool Login(const MQTTConnectData& mQTTConnectData);
     uint16_t WriteString(const char* string, uint8_t* buf, uint16_t pos);
     bool Write(uint8_t header, uint8_t* buf, uint16_t length);
     size_t BuildHeader(uint8_t header, uint8_t* buf, uint16_t length);
     static void (*callback)(char* topic, uint8_t* payload, uint16_t plength);
-    void (*connected)();
+    void (*connected)() = nullptr;
     bool isConnected = false;
     static bool suback;
     static bool connack;
@@ -87,7 +93,7 @@ class MQTTClient
     
   public:
     MQTTClient(EspDrv *espDriver, void(*callback)(char* topic, uint8_t* payload, uint16_t plength), uint8_t pQosBufferLength = 16);
-    bool Connect(MQTTConnectData mQTTConnectData);
+    bool Connect(const MQTTConnectData& mQTTConnectData);
     void Disconnect();
     void Subscribe(const char* topic);
     void Subscribe(const char* topic, uint8_t qos);
