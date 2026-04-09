@@ -28,14 +28,14 @@ class EspDrv
 {
   private:
     Stream *serial;
-    unsigned char ringBuffer[16];
+    unsigned char ringBuffer[16] = {};
     uint8_t ringBufferLength = 16;
     uint8_t ringBufferTail = 0;
     EspReadState state = EspReadState::IDLE;
     EspReadState lastState = EspReadState::IDLE;
-    uint8_t* receivedDataBuffer;
+    uint8_t* receivedDataBuffer = nullptr;
     uint16_t receivedDataBufferSize = 0;
-    uint16_t receivedDataLength;
+    uint16_t receivedDataLength = 0;
     uint16_t dataRead = 0;
     const char* tag = "";
     unsigned long startDataReadMillis = 0;
@@ -72,13 +72,13 @@ class EspDrv
     void Disconnect();
     bool Write(uint8_t* data, uint16_t length);
     void Loop();
-    void (*DataReceived) (uint8_t* buffer, int length);
+    void (*DataReceived) (uint8_t* buffer, int length) = nullptr;
     int GetConnectionStatus();
     uint8_t GetClientStatus();
     void Close();
     void Reset();
     uint8_t GetMemAllocFailCount();
     uint8_t GetTagRecognitionFailCount();
-    void (*DataTimeout)();
+    void (*DataTimeout)() = nullptr;
 };
 #endif

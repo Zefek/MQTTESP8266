@@ -160,7 +160,7 @@ void EspDrv::Loop()
         if (c == ':') 
         {
           receivedDataBuffer[dataRead++] = '\0';
-          int result = sscanf(receivedDataBuffer, "%d", &receivedDataLength);
+          int result = sscanf(receivedDataBuffer, "%hu", &receivedDataLength);
           PRINT_DEBUG("Data length ");
           PRINTLN_DEBUG(receivedDataLength);
           if(result != 1 || receivedDataLength <= 0 || receivedDataLength > 512)
@@ -384,7 +384,7 @@ bool EspDrv::SendCmd(const __FlashStringHelper* cmd, const char* tag, unsigned l
 {
   char cmdBuf[CMD_BUFFER_SIZE];
   va_list args;
-  va_start(args, cmd);
+  va_start(args, timeout);
   vsnprintf_P(cmdBuf, CMD_BUFFER_SIZE, (char*)cmd, args);
   va_end(args);
   WaitUntilReady();
