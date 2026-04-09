@@ -2,12 +2,15 @@ name: Build
 
 on: [push, pull_request]
 
+permissions:
+  contents: read
+
 jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: arduino/arduino-lint-action@v2
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: arduino/arduino-lint-action@4de5fc895deecbda2f6b1cc05de7a8fdd5c4c51f  # v2.0.0
         with:
           library-manager: update
           compliance: strict
@@ -17,13 +20,11 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Install Arduino CLI
         if: github.event_name == 'pull_request'
-        run: |
-          curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | sh
-          sudo mv bin/arduino-cli /usr/local/bin/
+        uses: arduino/setup-arduino-cli@81d310742121c928ea9c8bbd407b4217b432ae02  # v2.0.0
 
       - name: Initialize Arduino CLI
         if: github.event_name == 'pull_request'
@@ -33,7 +34,12 @@ jobs:
 
       - name: Install required board core
         if: github.event_name == 'pull_request'
-        run: arduino-cli core install arduino:avr  # např. pro Arduino Uno
+        run: arduino-cli core install arduino:avr@1.8.7
+
+      - name: Static analysis
+        run: |
+          sudo apt-get install -y cppcheck
+          cppcheck --enable=all --language=c++ --suppress=missingIncludeSystem --suppress=unusedFunction --suppress=unusedStructMember --suppress=noExplicitConstructor --suppress=noCopyConstructor --suppress=noOperatorEq --suppress=cstyleCast --suppress=constParameterCallback --suppress=constParameterPointer --suppress=constVariablePointer --suppress=unsignedLessThanZero --suppress=unsignedPositive --suppress=checkersReport --suppress=noDestructor --suppress=unmatchedSuppression --error-exitcode=1 src/
 
       - name: Compile Arduino project
         if: github.event_name == 'pull_request'
