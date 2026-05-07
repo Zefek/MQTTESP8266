@@ -335,24 +335,14 @@ void EspDrv::Loop()
     else if (CompareRingBuffer("BUSY") == 0 && this->state == EspReadState::IDLE)
     {
       PRINTLN_WARNING(F("BUSY"));
-      if(busyTryCount > 10)
+      if(this->OnBusy != nullptr)
       {
-        busyTimeout = 0;
-        busyTryCount = 0;
-        this->state = EspReadState::IDLE;
-        if(this->BusyExceeded != nullptr)
-        {
-          this->BusyExceeded();
-        }
-        continue;
+        this->OnBusy(busyTryCount);
       }
-      else
-      {
-        busyTryCount++;
-        busyTimeout = min(busyTimeout * 2 + random(200, 1000), 5000);
-        busyTime = millis();
-        this->state = EspReadState::BUSY;
-      }
+      busyTryCount++;
+      busyTimeout = min(busyTimeout * 2 + random(200, 1000), 5000);
+      busyTime = millis();
+      this->state = EspReadState::BUSY;
     }
   }
 }

@@ -18,8 +18,11 @@ below.
 - `EspDrv::DataIgnored(uint16_t length)` callback fired when an incoming
   message exceeds `maxAllowedDataLength` and is drained without buffering.
   Useful for telemetry and observability.
-- `EspDrv::BusyExceeded()` callback fired when ESP returns `BUSY` more than
-  10 times in a row. Replaces the previous internal `Close()` call.
+- `EspDrv::OnBusy(uint8_t count)` callback fired on every `BUSY`
+  response from ESP, with the running consecutive-BUSY counter. The
+  application decides what threshold (if any) warrants action. Replaces
+  the previous internal `Close()` after 10 retries — driver no longer
+  imposes any policy.
 - `EspDrv::Init()` parameters for tuning receive behavior:
   - `maxAllowedDataLength` (default 512) — caps in-RAM buffering; larger
     messages are drained.
@@ -53,7 +56,7 @@ below.
   The local connection status is updated directly (TCP not connected),
   eliminating a recursive `SendCmd` call from inside `Loop()`.
 - `BUSY` retry exceeded (count > 10) no longer auto-closes the connection
-  inline. Instead, `BusyExceeded` callback fires and the application
+  inline. Instead, `OnBusy` callback fires and the application
   decides the recovery action — keeping the BUSY counter (which is reset
   by driver-internal events) in the driver where it belongs.
 - `nextMsgId` resets to 0 on `Connect()` so packet IDs after reconnect
@@ -105,21 +108,26 @@ Existing calls that ignore the return value continue to compile.
 #### BUSY recovery
 
 Previously the library closed the TCP connection automatically after 10
-consecutive BUSY responses. Now it fires `BusyExceeded` and lets the
-application decide. To preserve the previous behavior:
+consecutive BUSY responses. Now it fires `OnBusy` on every BUSY with
+the running counter, and the application decides any threshold and
+recovery action. To preserve the previous behavior (close after 10):
 
 ```cpp
-volatile bool busyExceeded = false;
-void OnBusyExceeded() { busyExceeded = true; }
+volatile bool closeOnBusyOverflow = false;
+
+void HandleBusy(uint8_t count) {
+  if (count > 10) closeOnBusyOverflow = true;
+  // count is also available for general telemetry
+}
 
 void setup() {
-  drv.BusyExceeded = OnBusyExceeded;
+  drv.OnBusy = HandleBusy;
   // ...
 }
 
 void loop() {
-  if (busyExceeded) {
-    busyExceeded = false;
+  if (closeOnBusyOverflow) {
+    closeOnBusyOverflow = false;
     drv.Close();
   }
   client.Loop();
@@ -151,7 +159,7 @@ drv.Init(128, 1024);  // 128 B receive buffer, drain anything > 1024 B
 #### Callback restriction
 
 User-supplied callbacks (`DataReceived`, `DataTimeout`, `DataIgnored`,
-`BusyExceeded`) are invoked synchronously from `EspDrv::Loop()`. They
+`OnBusy`) are invoked synchronously from `EspDrv::Loop()`. They
 **must not** call EspDrv methods that issue AT commands: `Close`, `Reset`,
 `Disconnect`, `GetConnectionStatus(true)`, `GetClientStatus(true)`.
 For such actions, set a flag and perform the action from your main

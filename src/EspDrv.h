@@ -103,6 +103,6 @@ class EspDrv
     void (*DataReceived) (uint8_t* buffer, int length) = nullptr;
     void (*DataTimeout)() = nullptr;
     void (*DataIgnored)(uint16_t length) = nullptr;
-    void (*BusyExceeded)() = nullptr;
+    void (*OnBusy)(uint8_t count) = nullptr;
 };
 #endif
