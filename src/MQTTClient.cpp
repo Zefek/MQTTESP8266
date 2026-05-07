@@ -27,9 +27,9 @@ void MQTTClient::DataReceived(uint8_t* data, int length)
     break;
     case MQTTPUBLISH:
     {
-      // Dekódování Remaining Length (VLQ, 1-4 bajty podle MQTT 3.1.1)
-      uint32_t multiplier = 1;
-      uint32_t remainingLen = 0;
+      // Přeskočení VLQ Remaining Length (1-4 bajty podle MQTT 3.1.1).
+      // Hodnotu samotnou nepotřebujeme - délku payloadu derivujeme
+      // z length - payloadOffset níže.
       uint8_t lenBytes = 0;
       uint8_t idx = 1;
       while(true)
@@ -39,13 +39,11 @@ void MQTTClient::DataReceived(uint8_t* data, int length)
           return;
         }
         uint8_t b = data[idx++];
-        remainingLen += (uint32_t)(b & 0x7F) * multiplier;
         lenBytes++;
         if((b & 0x80) == 0)
         {
           break;
         }
-        multiplier <<= 7;
       }
 
       uint8_t varHeaderStart = 1 + lenBytes;
