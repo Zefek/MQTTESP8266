@@ -2,6 +2,7 @@
 #define __ESPDRV_H
 
 #define CMD_BUFFER_SIZE 200
+#define PER_BYTE_BUDGET_MS 50UL
 
 #define ESP_NOTCONNECTED 0
 #define ESP_CONNECTED 1
@@ -37,6 +38,13 @@ class EspDrv
     uint16_t receivedDataBufferSize = 0;
     uint16_t receivedDataLength = 0;
     uint16_t dataRead = 0;
+    uint16_t maxAllowedDataLength = 512;
+    bool ignoreReceivedData = false;
+    bool closeRequested = false;
+    bool inClose = false;
+    unsigned long interByteTimeoutMs = 1000;
+    unsigned long fixedTimeoutReserveMs = 1000;
+    unsigned long dataStartedMillis = 0;
     const char* tag = "";
     unsigned long startDataReadMillis = 0;
     unsigned long statusRead = 0;
@@ -66,19 +74,35 @@ class EspDrv
 
   public:
     EspDrv(Stream *serial);
-    void Init(uint8_t receivedBufferSize);
+    // interByteTimeoutMs: timeout mezi dvěma bajty, chytá mrtvou linku.
+    // fixedTimeoutReserveMs: fixní rezerva přičtená k cumulative timeoutu.
+    // Cumulative timeout = receivedDataLength * PER_BYTE_BUDGET_MS + fixedTimeoutReserveMs.
+    // PER_BYTE_BUDGET_MS = 50 ms je konzervativní pro UART rychlosti od 9600 Bd výš
+    // s rezervou na ESP processing overhead.
+    void Init(uint8_t receivedBufferSize,
+              uint16_t maxAllowedDataLength = 512,
+              unsigned long interByteTimeoutMs = 1000,
+              unsigned long fixedTimeoutReserveMs = 1000);
     int Connect(const char* ssid, const char* password);
     int TCPConnect(const char* url, int port);
     void Disconnect();
     bool Write(uint8_t* data, uint16_t length);
     void Loop();
-    void (*DataReceived) (uint8_t* buffer, int length) = nullptr;
     int GetConnectionStatus();
     uint8_t GetClientStatus();
     void Close();
     void Reset();
     uint8_t GetMemAllocFailCount();
     uint8_t GetTagRecognitionFailCount();
+
+    // Callbacky níže jsou volány synchronně z Loop().
+    // NESMÍ volat metody EspDrv, které vedou na SendCmd
+    // (Close, Reset, Disconnect, GetConnectionStatus(true),
+    //  GetClientStatus(true)). Pro takové akce nastavte vlastní flag
+    // a metodu zavolejte z hlavního loop() aplikace.
+    void (*DataReceived) (uint8_t* buffer, int length) = nullptr;
     void (*DataTimeout)() = nullptr;
+    void (*DataIgnored)(uint16_t length) = nullptr;
+    void (*BusyExceeded)() = nullptr;
 };
 #endif

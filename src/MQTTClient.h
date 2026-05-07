@@ -95,8 +95,8 @@ class MQTTClient
     MQTTClient(EspDrv *espDriver, void(*callback)(char* topic, uint8_t* payload, uint16_t plength), uint8_t pQosBufferLength = 16);
     bool Connect(const MQTTConnectData& mQTTConnectData);
     void Disconnect();
-    void Subscribe(const char* topic);
-    void Subscribe(const char* topic, uint8_t qos);
+    bool Subscribe(const char* topic);
+    bool Subscribe(const char* topic, uint8_t qos);
     bool Publish(const char* topic, const char* payload);
     bool Publish(const char* topic, const char* payload, boolean retained);
     bool Publish(const char* topic, const uint8_t* payload, unsigned int plength);

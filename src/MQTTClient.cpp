@@ -1,69 +1,99 @@
 #include "MQTTClient.h"
 #include <avr/wdt.h>
 
-static bool MQTTClient::pingOutstanding = false;
-static void (*MQTTClient::callback)(char* topic, uint8_t* payload, uint16_t plength) = 0;
-static bool MQTTClient::suback = false;
-static bool MQTTClient::connack = false;
-static uint8_t MQTTClient::qosBufferHead = 0;
-static uint8_t MQTTClient::qosBufferTail = 0;
-static uint8_t MQTTClient::qosBufferCount = 0;
-static bool MQTTClient::fullQoSBuffer = false;
-static uint8_t MQTTClient::qosBufferLength = 16;
-static uint16_t* MQTTClient::qosBufferPacketIds;
+bool MQTTClient::pingOutstanding = false;
+void (*MQTTClient::callback)(char* topic, uint8_t* payload, uint16_t plength) = 0;
+bool MQTTClient::suback = false;
+bool MQTTClient::connack = false;
+uint8_t MQTTClient::qosBufferHead = 0;
+uint8_t MQTTClient::qosBufferTail = 0;
+uint8_t MQTTClient::qosBufferCount = 0;
+bool MQTTClient::fullQoSBuffer = false;
+uint8_t MQTTClient::qosBufferLength = 16;
+uint16_t* MQTTClient::qosBufferPacketIds;
 
-static void MQTTClient::DataReceived(uint8_t* data, int length)
+void MQTTClient::DataReceived(uint8_t* data, int length)
 {
   switch(data[0]&0xF0)
   {
     case MQTTSUBACK:
       MQTTClient::suback = true;
     break;
-    case MQTTCONNACK: 
+    case MQTTCONNACK:
       connack = true;
     break;
-    case MQTTPINGRESP: 
+    case MQTTPINGRESP:
       MQTTClient::pingOutstanding = false;
     break;
     case MQTTPUBLISH:
-    uint8_t remainingLen = data[1];  // Pozor, toto je pouze první byte Remaining Length, viz poznámka níže
-    uint16_t topicLen = (data[2] << 8) | data[3];
-
-    // Posuň topic o 1 byte dozadu a přidej nulový terminátor
-    memmove(data + 3, data + 4, topicLen);
-    data[topicLen + 3] = '\0';
-    char* topic = (char*)(data + 3);
-
-    // Zjisti QoS z fixed header (bit 1 a 2)
-    uint8_t qos = (data[0] >> 1) & 0x03;
-
-    uint8_t* payload;
-    uint16_t payloadOffset = 4 + topicLen;
-
-    if (qos > 0) 
     {
-      // Packet Identifier je 2 bajty za topicem
-      uint16_t packetId = (data[payloadOffset] << 8) | data[payloadOffset + 1];
-      if(qosBufferHead == qosBufferTail && qosBufferCount != 0)
+      // Dekódování Remaining Length (VLQ, 1-4 bajty podle MQTT 3.1.1)
+      uint32_t multiplier = 1;
+      uint32_t remainingLen = 0;
+      uint8_t lenBytes = 0;
+      uint8_t idx = 1;
+      while(true)
       {
-        fullQoSBuffer = true;
+        if(idx >= (uint8_t)length || lenBytes >= 4)
+        {
+          return;
+        }
+        uint8_t b = data[idx++];
+        remainingLen += (uint32_t)(b & 0x7F) * multiplier;
+        lenBytes++;
+        if((b & 0x80) == 0)
+        {
+          break;
+        }
+        multiplier <<= 7;
+      }
+
+      uint8_t varHeaderStart = 1 + lenBytes;
+      if(varHeaderStart + 2 > (uint16_t)length)
+      {
         return;
       }
-      qosBufferPacketIds[qosBufferHead] = packetId;
-      qosBufferHead = (qosBufferHead + 1) % qosBufferLength;
-      qosBufferCount++;
-      payloadOffset += 2;
+      uint16_t topicLen = (data[varHeaderStart] << 8) | data[varHeaderStart + 1];
+      if((uint32_t)varHeaderStart + 2 + topicLen > (uint32_t)length)
+      {
+        return;
+      }
+
+      memmove(data + varHeaderStart + 1, data + varHeaderStart + 2, topicLen);
+      data[varHeaderStart + 1 + topicLen] = '\0';
+      char* topic = (char*)(data + varHeaderStart + 1);
+
+      uint8_t qos = (data[0] >> 1) & 0x03;
+      uint16_t payloadOffset = varHeaderStart + 2 + topicLen;
+
+      if (qos > 0)
+      {
+        if(payloadOffset + 2 > (uint16_t)length)
+        {
+          return;
+        }
+        uint16_t packetId = (data[payloadOffset] << 8) | data[payloadOffset + 1];
+        if(qosBufferHead == qosBufferTail && qosBufferCount != 0)
+        {
+          fullQoSBuffer = true;
+          return;
+        }
+        qosBufferPacketIds[qosBufferHead] = packetId;
+        qosBufferHead = (qosBufferHead + 1) % qosBufferLength;
+        qosBufferCount++;
+        payloadOffset += 2;
+      }
+
+      uint8_t* payload = data + payloadOffset;
+      uint16_t payloadLen = (uint16_t)length - payloadOffset;
+
+      if(callback != nullptr)
+      {
+        callback(topic, payload, payloadLen);
+      }
     }
-
-    payload = data + payloadOffset;
-
-    // Vypočítat délku payloadu správně (nutné správně dekódovat Remaining Length)
-    uint16_t payloadLen = remainingLen - (payloadOffset - 2); // -2 protože Remaining Length počítá od data[2]
-
-    // Zavolat callback s topicem, payloadem, délkou payloadu a packetId
-    callback(topic, payload, payloadLen);
     break;
-    
+
   }
 }
 
@@ -87,6 +117,7 @@ bool MQTTClient::Connect(const MQTTConnectData& mqttConnectData)
   fullQoSBuffer = false;
   qosBufferHead = qosBufferTail = 0;
   qosBufferCount = 0;
+  nextMsgId = 0;
   return this->Login(mqttConnectData);
 }
 
@@ -177,36 +208,34 @@ uint16_t MQTTClient::WriteString(const char* string, uint8_t* buf, uint16_t pos)
   return pos;
 }
 
-void MQTTClient::Subscribe(const char* topic) 
+bool MQTTClient::Subscribe(const char* topic)
 {
-  Subscribe(topic, 0);
+  return Subscribe(topic, 0);
 }
 
-void MQTTClient::Subscribe(const char *topic, uint8_t qos)
+bool MQTTClient::Subscribe(const char *topic, uint8_t qos)
 {
   if(!isConnected)
   {
-    return;
+    return false;
+  }
+  if (topic == 0)
+  {
+    return false;
+  }
+  if (qos > 1)
+  {
+    return false;
+  }
+  size_t topicLength = strnlen(topic, this->bufferSize);
+  if (this->bufferSize < 9 + topicLength)
+  {
+    return false;
   }
   MQTTClient::suback = false;
-  size_t topicLength = strnlen(topic, this->bufferSize);
-  if (topic == 0) 
-  {
-    return false;
-  }
-  if (qos > 1) 
-  {
-    return false;
-  }
-  if (this->bufferSize < 9 + topicLength) 
-  {
-    // Too long
-    return false;
-  }
-  // Leave room in the buffer for header and variable length field
   uint16_t length = MQTT_MAX_HEADER_SIZE;
   nextMsgId++;
-  if (nextMsgId == 0) 
+  if (nextMsgId == 0)
   {
     nextMsgId = 1;
   }
@@ -222,6 +251,7 @@ void MQTTClient::Subscribe(const char *topic, uint8_t qos)
   }
   delay(200);
   client->Loop();
+  return MQTTClient::suback;
 }
 
 bool MQTTClient::Publish(const char* topic, const char* payload) 

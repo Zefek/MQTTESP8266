@@ -76,15 +76,29 @@ void EspDrv::CheckTimeout()
     break;
     case EspReadState::DATA:
     case EspReadState::DATA_LENGTH:
-      if(millis() - startDataReadMillis > 3000)
+    {
+      bool interByte = millis() - startDataReadMillis > interByteTimeoutMs;
+      bool cumulative = false;
+      if(receivedDataLength > 0)
+      {
+        unsigned long expectedDataTime =
+            (unsigned long)receivedDataLength * PER_BYTE_BUDGET_MS + fixedTimeoutReserveMs;
+        cumulative = millis() - dataStartedMillis > expectedDataTime;
+      }
+      if(interByte || cumulative)
       {
         PRINTLN_WARNING(F("Data timout expired."));
         this->state = EspReadState::IDLE;
         dataRead = 0;
         receivedDataLength = 0;
+        ignoreReceivedData = false;
         ResetBuffer(receivedDataBuffer, receivedDataBufferSize);
-        this->DataTimeout();
+        if(this->DataTimeout != nullptr)
+        {
+          this->DataTimeout();
+        }
       }
+    }
     break;
     case EspReadState::BUSY:
       if(millis() - busyTime > busyTimeout)
@@ -96,10 +110,15 @@ void EspDrv::CheckTimeout()
   }
 }
 
-void EspDrv::Loop() 
+void EspDrv::Loop()
 {
+  if(closeRequested)
+  {
+    closeRequested = false;
+    Close();
+  }
   CheckTimeout();
-  while (this->serial->available()) 
+  while (this->serial->available())
   {
     CheckTimeout();
     int raw = this->serial->read();
@@ -146,29 +165,38 @@ void EspDrv::Loop()
         startDataReadMillis = millis();
         if (dataRead > 6)
         {
-          startDataReadMillis = millis();
-          if(this->lastState == EspReadState::STATUS)
-          {
-            statusTimer = millis();
-            statusCounter = 0;
-          }
+          PRINTLN_ERROR(F("Data length too long, requesting close."));
           dataRead = 0;
           receivedDataLength = 0;
-          this->state = this->lastState;
+          ResetBuffer(receivedDataBuffer, receivedDataBufferSize);
+          this->state = EspReadState::IDLE;
+          closeRequested = true;
           return;
         }
-        if (c == ':') 
+        if (c == ':')
         {
           receivedDataBuffer[dataRead++] = '\0';
           int result = sscanf(receivedDataBuffer, "%hu", &receivedDataLength);
           PRINT_DEBUG("Data length ");
           PRINTLN_DEBUG(receivedDataLength);
-          if(result != 1 || receivedDataLength <= 0 || receivedDataLength > 512)
+          if(result != 1 || receivedDataLength == 0)
           {
+            PRINTLN_ERROR(F("Invalid data length, requesting close."));
             dataRead = 0;
             receivedDataLength = 0;
             ResetBuffer(receivedDataBuffer, receivedDataBufferSize);
-            this->state = this->lastState;
+            this->state = EspReadState::IDLE;
+            closeRequested = true;
+            return;
+          }
+          if(receivedDataLength > maxAllowedDataLength)
+          {
+            PRINT_WARNING(F("Data length exceeds limit, draining: "));
+            PRINTLN_WARNING(receivedDataLength);
+            dataRead = 0;
+            ignoreReceivedData = true;
+            this->state = EspReadState::DATA;
+            startDataReadMillis = millis();
             continue;
           }
           dataRead = 0;
@@ -213,15 +241,33 @@ void EspDrv::Loop()
         }
       break;
       case EspReadState::DATA:
-        receivedDataBuffer[dataRead++] = (uint8_t)raw;
+        if(!ignoreReceivedData)
+        {
+          receivedDataBuffer[dataRead] = (uint8_t)raw;
+        }
+        dataRead++;
         startDataReadMillis = millis();
-        if (dataRead == receivedDataLength) 
+        if (dataRead == receivedDataLength)
         {
           PRINTLN_DEBUG(F("Read all received data."));
-          DataReceived(receivedDataBuffer, receivedDataLength);
+          if(ignoreReceivedData)
+          {
+            if(this->DataIgnored != nullptr)
+            {
+              this->DataIgnored(receivedDataLength);
+            }
+            ignoreReceivedData = false;
+          }
+          else
+          {
+            if(this->DataReceived != nullptr)
+            {
+              this->DataReceived(receivedDataBuffer, receivedDataLength);
+            }
+            ResetBuffer(receivedDataBuffer, receivedDataBufferSize);
+          }
           dataRead = 0;
           receivedDataLength = 0;
-          ResetBuffer(receivedDataBuffer, receivedDataBufferSize);
           statusRead = millis();
           this->state = busyTryCount > 0? EspReadState::BUSY : EspReadState::IDLE;
           continue;
@@ -230,7 +276,7 @@ void EspDrv::Loop()
         PRINT_TRACE(dataRead);
         PRINT_TRACE(F("/"));
         PRINTLN_TRACE(receivedDataLength);
-      break;
+        continue;
     }
     if(c >= 32 && c <= 126)
     {
@@ -254,12 +300,13 @@ void EspDrv::Loop()
         return;
       } 
     }
-    if (CompareRingBuffer("+IPD,") == 0) 
+    if (CompareRingBuffer("+IPD,") == 0)
     {
       PRINTLN_DEBUG(F("+IPD"));
       ringBufferTail = (ringBufferTail - 5 + ringBufferLength) % ringBufferLength;
       dataRead = 0;
       startDataReadMillis = millis();
+      dataStartedMillis = millis();
       this->lastState = this->state;
       this->state = EspReadState::DATA_LENGTH;
     }
@@ -273,7 +320,7 @@ void EspDrv::Loop()
       busyTryCount = 0;
       this->state = EspReadState::STATUS;
     }
-    else if (CompareRingBuffer("CLOSED") == 0 && (this->state == EspReadState::IDLE || this->state == EspReadState::BUSY)) 
+    else if (CompareRingBuffer("CLOSED") == 0 && (this->state == EspReadState::IDLE || this->state == EspReadState::BUSY))
     {
       PRINTLN_DEBUG(F("CLOSED"));
       if(this->state == EspReadState::BUSY)
@@ -282,7 +329,8 @@ void EspDrv::Loop()
         busyTryCount = 0;
         this->state = EspReadState::IDLE;
       }
-      GetConnectionStatus(true);
+      lastConnectionStatus = 4;
+      statusRead = millis();
     }
     else if (CompareRingBuffer("BUSY") == 0 && this->state == EspReadState::IDLE)
     {
@@ -292,7 +340,10 @@ void EspDrv::Loop()
         busyTimeout = 0;
         busyTryCount = 0;
         this->state = EspReadState::IDLE;
-        Close();
+        if(this->BusyExceeded != nullptr)
+        {
+          this->BusyExceeded();
+        }
         continue;
       }
       else
@@ -306,8 +357,14 @@ void EspDrv::Loop()
   }
 }
 
-void EspDrv::Init(uint8_t receivedBufferSize)
+void EspDrv::Init(uint8_t receivedBufferSize,
+                  uint16_t maxAllowedDataLength,
+                  unsigned long interByteTimeoutMs,
+                  unsigned long fixedTimeoutReserveMs)
 {
+  this->maxAllowedDataLength = maxAllowedDataLength;
+  this->interByteTimeoutMs = interByteTimeoutMs;
+  this->fixedTimeoutReserveMs = fixedTimeoutReserveMs;
   if(this->SendCmd(F("ATE0"), "OK", 1000))
   {
     if(this->SendCmd(F("AT+RST"), "OK", 30000))
@@ -367,6 +424,9 @@ bool EspDrv::Write(uint8_t* data, uint16_t length)
 
 void EspDrv::WaitUntilReady()
 {
+  // Druhá podmínka (1s po lastDataSend) je workaround pro timing ESP firmware:
+  // po AT+CIPSEND a odeslání dat ESP může s odstupem poslat dodatečné odpovědi
+  // nebo příchozí +IPD. Bez tohoto čekání by další SendCmd mohl narušit příjem.
   do
   {
     Loop();
@@ -496,8 +556,14 @@ void EspDrv::Disconnect()
 
 void EspDrv::Close()
 {
+  if(inClose)
+  {
+    return;
+  }
+  inClose = true;
   this->SendCmd(F("AT+CIPCLOSE"), "OK", 1000);
   lastConnectionStatus = GetConnectionStatus(true);
+  inClose = false;
 }
 
 void EspDrv::Reset()
