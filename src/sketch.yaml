@@ -1,0 +1,6 @@
+profiles:
+  MQTTESP8266_Uno:
+    fqbn: arduino:avr:uno
+    platforms:
+      - platform: arduino:avr (1.8.7)
+default_profile: MQTTESP8266_Uno
