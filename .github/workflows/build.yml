@@ -16,7 +16,6 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       - uses: arduino/arduino-lint-action@4de5fc895deecbda2f6b1cc05de7a8fdd5c4c51f  # v2.0.0
         with:
-          project-type: library
           library-manager: update
           compliance: strict
 
@@ -43,7 +42,7 @@ jobs:
       - name: Compile
         run: |
           arduino-cli compile ./src
-          for example in examples/*/; do
-            echo "Compiling $example"
-            arduino-cli compile "$example"
+          for demo in demos/*/; do
+            echo "Compiling $demo"
+            arduino-cli compile "$demo"
           done
