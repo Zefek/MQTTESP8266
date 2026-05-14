@@ -22,7 +22,8 @@ enum EspReadState {
   DATA_LENGTH,       // čtení délky dat za +IPD
   DATA,              // čtení samotných dat +IPD
   STATUS,
-  BUSY
+  BUSY,
+  CWJAP              // čtení odpovědi +CWJAP_CUR: (RSSI)
 };
 
 class EspDrv
@@ -59,6 +60,12 @@ class EspDrv
     uint8_t busyTryCount = 0;
     uint8_t memAllocFailCount = 0;
     uint8_t tagRecognitionFailCount = 0;
+    int8_t lastRssi = 0;
+    uint8_t cwjapCommaCount = 0;
+    int16_t cwjapRssiAcc = 0;
+    bool cwjapRssiNeg = false;
+    bool cwjapInQuotes = false;
+    bool cwjapFound = false;
 
     bool SendData(uint8_t* data, uint16_t length);
     bool SendCmd(const __FlashStringHelper* cmd, const char* tag, unsigned long timeout, ...);
@@ -94,6 +101,7 @@ class EspDrv
     void Reset();
     uint8_t GetMemAllocFailCount();
     uint8_t GetTagRecognitionFailCount();
+    int8_t GetRssi();
 
     // Callbacky níže jsou volány synchronně z Loop().
     // NESMÍ volat metody EspDrv, které vedou na SendCmd

@@ -39,6 +39,10 @@ jobs:
           arduino-cli config init
           arduino-cli core update-index
 
-      - name: Compile Arduino project
+      - name: Compile
         run: |
-          arduino-cli compile --profile MQTTESP8266_Uno ./src
+          arduino-cli compile ./src
+          for example in examples/*/; do
+            echo "Compiling $example"
+            arduino-cli compile "$example"
+          done

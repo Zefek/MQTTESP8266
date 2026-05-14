@@ -1,0 +1,8 @@
+profiles:
+  MqttSubscribe_Uno:
+    fqbn: arduino:avr:uno
+    platforms:
+      - platform: arduino:avr (1.8.7)
+    libraries:
+      - dir: ../../src
+default_profile: MqttSubscribe_Uno
