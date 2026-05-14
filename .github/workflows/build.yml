@@ -42,7 +42,7 @@ jobs:
       - name: Compile
         run: |
           arduino-cli compile ./src
-          for demo in demos/*/; do
+          for demo in extras/*/; do
             echo "Compiling $demo"
             arduino-cli compile "$demo"
           done
