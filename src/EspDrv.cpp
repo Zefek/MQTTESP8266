@@ -161,6 +161,38 @@ void EspDrv::Loop()
           }
         }
       break;
+      case EspReadState::CWJAP:
+        if(c == '\r' || c == '\n')
+        {
+          if(cwjapCommaCount == 3)
+          {
+            lastRssi = cwjapRssiNeg ? -cwjapRssiAcc : (int8_t)cwjapRssiAcc;
+            PRINT_DEBUG("RSSI ");
+            PRINTLN_DEBUG(lastRssi);
+          }
+          this->state = EspReadState::IDLE;
+          continue;
+        }
+        if(c == '"')
+        {
+          cwjapInQuotes = !cwjapInQuotes;
+        }
+        else if(c == ',' && !cwjapInQuotes)
+        {
+          cwjapCommaCount++;
+        }
+        else if(cwjapCommaCount == 3)
+        {
+          if(c == '-')
+          {
+            cwjapRssiNeg = true;
+          }
+          else if(c >= '0' && c <= '9')
+          {
+            cwjapRssiAcc = cwjapRssiAcc * 10 + (c - '0');
+          }
+        }
+        continue;
       case EspReadState::DATA_LENGTH:
         startDataReadMillis = millis();
         if (dataRead > 6)
@@ -310,7 +342,19 @@ void EspDrv::Loop()
       this->lastState = this->state;
       this->state = EspReadState::DATA_LENGTH;
     }
-    else if (CompareRingBuffer("STATUS:") == 0 && (this->state == EspReadState::IDLE || this->state == EspReadState::BUSY) && !statusFound) 
+    else if (CompareRingBuffer("+CWJAP_CUR:") == 0 && (this->state == EspReadState::IDLE || this->state == EspReadState::BUSY) && !cwjapFound)
+    {
+      PRINTLN_DEBUG(F("+CWJAP_CUR"));
+      cwjapFound = true;
+      cwjapCommaCount = 0;
+      cwjapRssiAcc = 0;
+      cwjapRssiNeg = false;
+      cwjapInQuotes = false;
+      busyTimeout = 0;
+      busyTryCount = 0;
+      this->state = EspReadState::CWJAP;
+    }
+    else if (CompareRingBuffer("STATUS:") == 0 && (this->state == EspReadState::IDLE || this->state == EspReadState::BUSY) && !statusFound)
     {
       PRINTLN_DEBUG(F("STATUS"));
       statusTimer = millis();
@@ -577,4 +621,15 @@ uint8_t EspDrv::GetMemAllocFailCount()
 uint8_t EspDrv::GetTagRecognitionFailCount()
 {
   return this->tagRecognitionFailCount;
+}
+
+int8_t EspDrv::GetRssi()
+{
+  cwjapFound = false;
+  this->SendCmd(F("AT+CWJAP_CUR?"), "OK", 1000);
+  if(this->state == EspReadState::CWJAP)
+  {
+    this->state = EspReadState::IDLE;
+  }
+  return lastRssi;
 }
