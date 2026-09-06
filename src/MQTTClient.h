@@ -1,7 +1,7 @@
 #ifndef __MQTTCLIENT_H
 #define __MQTTCLIENT_H
 
-#include "EspDrv.h"
+#include "IEspDrv.h"
 
 #define MQTT_VERSION_3_1      3
 #define MQTT_VERSION_3_1_1    4
@@ -64,35 +64,39 @@ struct MQTTConnectData
 class MQTTClient
 {
   private:
-    EspDrv* client;
+    IEspDrv* client;
     uint8_t* buffer;
     uint16_t bufferSize = 256;
     uint16_t keepAlive = 30;
     unsigned long lastOutActivity = 0;
-    unsigned long lastInActivity = 0;
-    static bool pingOutstanding;
+    unsigned long pingSentAt = 0;
+    bool pingOutstanding = false;
     uint32_t nextMsgId = 0;
+    // Trampolína pro C ukazatel na funkci v IEspDrv - přesměruje na HandleData
+    // instance drzené v globálu v MQTTClient.cpp.
     static void DataReceived(uint8_t* data, int length);
+    void HandleData(uint8_t* data, int length);
     bool Login(const MQTTConnectData& mQTTConnectData);
     uint16_t WriteString(const char* string, uint8_t* buf, uint16_t pos);
     bool Write(uint8_t header, uint8_t* buf, uint16_t length);
     size_t BuildHeader(uint8_t header, uint8_t* buf, uint16_t length);
-    static void (*callback)(char* topic, uint8_t* payload, uint16_t plength);
+    void (*callback)(char* topic, uint8_t* payload, uint16_t plength) = nullptr;
     void (*connected)() = nullptr;
     bool isConnected = false;
-    static bool suback;
-    static bool connack;
-    static uint16_t* qosBufferPacketIds;
-    static uint8_t qosBufferHead;
-    static uint8_t qosBufferTail;
-    static uint8_t qosBufferCount;
-    static bool fullQoSBuffer;
-    static uint8_t qosBufferLength;
+    bool suback = false;
+    bool connack = false;
+    uint8_t connackCode = 0xFF;
+    uint16_t* qosBufferPacketIds = nullptr;
+    uint8_t qosBufferHead = 0;
+    uint8_t qosBufferTail = 0;
+    uint8_t qosBufferCount = 0;
+    bool fullQoSBuffer = false;
+    uint8_t qosBufferLength = 16;
 
     void sendPubAck(uint16_t packetId);
     
   public:
-    MQTTClient(EspDrv *espDriver, void(*callback)(char* topic, uint8_t* payload, uint16_t plength), uint8_t pQosBufferLength = 16);
+    MQTTClient(IEspDrv *espDriver, void(*callback)(char* topic, uint8_t* payload, uint16_t plength), uint8_t pQosBufferLength = 16);
     bool Connect(const MQTTConnectData& mQTTConnectData);
     void Disconnect();
     bool Subscribe(const char* topic);
@@ -103,6 +107,9 @@ class MQTTClient
     bool Publish(const char* topic, const uint8_t* payload, unsigned int plength, boolean retained);
     bool Loop();
     bool IsConnected();
+    // Navratovy kod z posledniho CONNACK podle MQTT 3.1.1 (0 = prijato,
+    // 4 = spatne jmeno nebo heslo, 5 = neautorizovano). 0xFF = zadny CONNACK.
+    uint8_t GetLastConnackCode();
 };
 
 #endif

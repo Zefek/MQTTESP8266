@@ -1,4 +1,4 @@
-#include "EspDrv.h"
+#include "EspDrvV4.h"
 #include <Arduino.h>
 #include <avr/wdt.h>
 #include <ctype.h>
@@ -36,12 +36,12 @@
   #define PRINT_ERROR(x)
 #endif
 
-EspDrv::EspDrv(Stream* serial) 
+EspDrvV4::EspDrvV4(Stream* serial) 
 {
   this->serial = serial;
 }
 
-int EspDrv::CompareRingBuffer(const char* input)
+int EspDrvV4::CompareRingBuffer(const char* input)
 {
   uint8_t length = strlen(input);
   uint8_t start = (ringBufferTail - length + ringBufferLength) % ringBufferLength;
@@ -57,7 +57,7 @@ int EspDrv::CompareRingBuffer(const char* input)
   return 0;
 }
 
-void EspDrv::ResetBuffer(uint8_t* buffer, uint16_t length)
+void EspDrvV4::ResetBuffer(uint8_t* buffer, uint16_t length)
 {
   if(buffer == nullptr)
   {
@@ -66,20 +66,20 @@ void EspDrv::ResetBuffer(uint8_t* buffer, uint16_t length)
   memset(buffer, 0, length);
 }
 
-void EspDrv::CheckTimeout()
+void EspDrvV4::CheckTimeout()
 {
   switch(this->state)
   {
-    case EspReadState::STATUS:
+    case EspV4ReadState::STATUS:
       if(millis() - statusTimer > 1000)
       {
         PRINTLN_WARNING(F("Status timout expired."));
-        this->state = EspReadState::IDLE;
+        this->state = EspV4ReadState::IDLE;
         statusCounter = 0;
       }
     break;
-    case EspReadState::DATA:
-    case EspReadState::DATA_LENGTH:
+    case EspV4ReadState::DATA:
+    case EspV4ReadState::DATA_LENGTH:
     {
       bool interByte = millis() - startDataReadMillis > interByteTimeoutMs;
       bool cumulative = false;
@@ -92,7 +92,7 @@ void EspDrv::CheckTimeout()
       if(interByte || cumulative)
       {
         PRINTLN_WARNING(F("Data timout expired."));
-        this->state = EspReadState::IDLE;
+        this->state = EspV4ReadState::IDLE;
         dataRead = 0;
         receivedDataLength = 0;
         ignoreReceivedData = false;
@@ -104,17 +104,17 @@ void EspDrv::CheckTimeout()
       }
     }
     break;
-    case EspReadState::BUSY:
+    case EspV4ReadState::BUSY:
       if(millis() - busyTime > busyTimeout)
       {
         PRINTLN_WARNING(F("Busy timout expired."));
-        this->state = EspReadState::IDLE;
+        this->state = EspV4ReadState::IDLE;
       }
     break;
   }
 }
 
-void EspDrv::Loop()
+void EspDrvV4::Loop()
 {
   if(closeRequested)
   {
@@ -145,13 +145,13 @@ void EspDrv::Loop()
     char c = (char)raw;
     switch(this->state)
     {
-      case EspReadState::STATUS:
+      case EspV4ReadState::STATUS:
         if(c >= '0' && c <= '5')
         {
           lastConnectionStatus = (int)(c - '0');
           PRINT_DEBUG("Connection status ");
           PRINTLN_DEBUG(lastConnectionStatus);
-          this->state = EspReadState::IDLE;
+          this->state = EspV4ReadState::IDLE;
           continue;
         }
         else
@@ -160,12 +160,12 @@ void EspDrv::Loop()
           if(statusCounter > 5 || millis() - statusTimer > 1000)
           {
             statusCounter = 0;
-            this->state = EspReadState::IDLE;
+            this->state = EspV4ReadState::IDLE;
             continue;
           }
         }
       break;
-      case EspReadState::CWJAP:
+      case EspV4ReadState::CWJAP:
         if(c == '\r' || c == '\n')
         {
           if(cwjapCommaCount == 3)
@@ -174,7 +174,7 @@ void EspDrv::Loop()
             PRINT_DEBUG("RSSI ");
             PRINTLN_DEBUG(lastRssi);
           }
-          this->state = EspReadState::IDLE;
+          this->state = EspV4ReadState::IDLE;
           continue;
         }
         if(c == '"')
@@ -183,6 +183,12 @@ void EspDrv::Loop()
         }
         else if(c == ',' && !cwjapInQuotes)
         {
+          if(cwjapCommaCount == 3)
+          {
+            lastRssi = cwjapRssiNeg ? -cwjapRssiAcc : (int8_t)cwjapRssiAcc;
+            PRINT_DEBUG("RSSI ");
+            PRINTLN_DEBUG(lastRssi);
+          }
           cwjapCommaCount++;
         }
         else if(cwjapCommaCount == 3)
@@ -197,14 +203,14 @@ void EspDrv::Loop()
           }
         }
         continue;
-      case EspReadState::DATA_LENGTH:
+      case EspV4ReadState::DATA_LENGTH:
         startDataReadMillis = millis();
         if (this->receivedDataBuffer == nullptr)
         {
           PRINTLN_ERROR(F("No data buffer, requesting close."));
           dataRead = 0;
           receivedDataLength = 0;
-          this->state = EspReadState::IDLE;
+          this->state = EspV4ReadState::IDLE;
           closeRequested = true;
           return;
         }
@@ -214,14 +220,14 @@ void EspDrv::Loop()
           dataRead = 0;
           receivedDataLength = 0;
           ResetBuffer(receivedDataBuffer, receivedDataBufferSize);
-          this->state = EspReadState::IDLE;
+          this->state = EspV4ReadState::IDLE;
           closeRequested = true;
           return;
         }
         if (c == ':')
         {
           receivedDataBuffer[dataRead++] = '\0';
-          int result = sscanf(receivedDataBuffer, "%hu", &receivedDataLength);
+          int result = sscanf((char*)receivedDataBuffer, "%hu", &receivedDataLength);
           PRINT_DEBUG("Data length ");
           PRINTLN_DEBUG(receivedDataLength);
           if(result != 1 || receivedDataLength == 0)
@@ -230,7 +236,7 @@ void EspDrv::Loop()
             dataRead = 0;
             receivedDataLength = 0;
             ResetBuffer(receivedDataBuffer, receivedDataBufferSize);
-            this->state = EspReadState::IDLE;
+            this->state = EspV4ReadState::IDLE;
             closeRequested = true;
             return;
           }
@@ -240,7 +246,7 @@ void EspDrv::Loop()
             PRINTLN_WARNING(receivedDataLength);
             dataRead = 0;
             ignoreReceivedData = true;
-            this->state = EspReadState::DATA;
+            this->state = EspV4ReadState::DATA;
             startDataReadMillis = millis();
             continue;
           }
@@ -277,14 +283,14 @@ void EspDrv::Loop()
               dataRead = 0;
               ignoreReceivedData = true;
               startDataReadMillis = millis();
-              this->state = EspReadState::DATA;
+              this->state = EspV4ReadState::DATA;
               continue;
             }
           }
           startDataReadMillis = millis();
           ResetBuffer(receivedDataBuffer, receivedDataBufferSize);
           dataRead = 0;
-          this->state = EspReadState::DATA;
+          this->state = EspV4ReadState::DATA;
         } 
         else 
         {
@@ -294,7 +300,7 @@ void EspDrv::Loop()
           }
         }
       break;
-      case EspReadState::DATA:
+      case EspV4ReadState::DATA:
         if(!ignoreReceivedData)
         {
           receivedDataBuffer[dataRead] = (uint8_t)raw;
@@ -323,7 +329,7 @@ void EspDrv::Loop()
           dataRead = 0;
           receivedDataLength = 0;
           statusRead = millis();
-          this->state = busyTryCount > 0? EspReadState::BUSY : EspReadState::IDLE;
+          this->state = busyTryCount > 0? EspV4ReadState::BUSY : EspV4ReadState::IDLE;
           continue;
         }
         PRINT_TRACE(F("Read "));
@@ -337,7 +343,7 @@ void EspDrv::Loop()
       ringBuffer[ringBufferTail] = c;
       ringBufferTail = (ringBufferTail + 1) % ringBufferLength;
     }
-    if((this->state == EspReadState::IDLE || this->state == EspReadState::BUSY) && this->expectedTag != nullptr)
+    if((this->state == EspV4ReadState::IDLE || this->state == EspV4ReadState::BUSY) && this->expectedTag != nullptr)
     {
       if (CompareRingBuffer(this->expectedTag) == 0) 
       {
@@ -345,11 +351,11 @@ void EspDrv::Loop()
         PRINTLN_DEBUG(this->expectedTag);
         TagReceived(this->expectedTag);
         this->expectedTag = nullptr;
-        if(this->state == EspReadState::BUSY)
+        if(this->state == EspV4ReadState::BUSY)
         {
           busyTimeout = 0;
           busyTryCount = 0;
-          this->state = EspReadState::IDLE;
+          this->state = EspV4ReadState::IDLE;
         }
         return;
       } 
@@ -362,11 +368,11 @@ void EspDrv::Loop()
       startDataReadMillis = millis();
       dataStartedMillis = millis();
       this->lastState = this->state;
-      this->state = EspReadState::DATA_LENGTH;
+      this->state = EspV4ReadState::DATA_LENGTH;
     }
-    else if (CompareRingBuffer("+CWJAP_CUR:") == 0 && (this->state == EspReadState::IDLE || this->state == EspReadState::BUSY) && !cwjapFound)
+    else if (CompareRingBuffer("+CWJAP:") == 0 && (this->state == EspV4ReadState::IDLE || this->state == EspV4ReadState::BUSY) && !cwjapFound)
     {
-      PRINTLN_DEBUG(F("+CWJAP_CUR"));
+      PRINTLN_DEBUG(F("+CWJAP"));
       cwjapFound = true;
       cwjapCommaCount = 0;
       cwjapRssiAcc = 0;
@@ -374,9 +380,9 @@ void EspDrv::Loop()
       cwjapInQuotes = false;
       busyTimeout = 0;
       busyTryCount = 0;
-      this->state = EspReadState::CWJAP;
+      this->state = EspV4ReadState::CWJAP;
     }
-    else if (CompareRingBuffer("STATUS:") == 0 && (this->state == EspReadState::IDLE || this->state == EspReadState::BUSY) && !statusFound)
+    else if (CompareRingBuffer("STATUS:") == 0 && (this->state == EspV4ReadState::IDLE || this->state == EspV4ReadState::BUSY) && !statusFound)
     {
       PRINTLN_DEBUG(F("STATUS"));
       statusTimer = millis();
@@ -384,21 +390,21 @@ void EspDrv::Loop()
       statusFound = true;
       busyTimeout = 0;
       busyTryCount = 0;
-      this->state = EspReadState::STATUS;
+      this->state = EspV4ReadState::STATUS;
     }
-    else if (CompareRingBuffer("CLOSED") == 0 && (this->state == EspReadState::IDLE || this->state == EspReadState::BUSY))
+    else if (CompareRingBuffer("CLOSED") == 0 && (this->state == EspV4ReadState::IDLE || this->state == EspV4ReadState::BUSY))
     {
       PRINTLN_DEBUG(F("CLOSED"));
-      if(this->state == EspReadState::BUSY)
+      if(this->state == EspV4ReadState::BUSY)
       {
         busyTimeout = 0;
         busyTryCount = 0;
-        this->state = EspReadState::IDLE;
+        this->state = EspV4ReadState::IDLE;
       }
       lastConnectionStatus = 4;
       statusRead = millis();
     }
-    else if (CompareRingBuffer("BUSY") == 0 && this->state == EspReadState::IDLE)
+    else if (CompareRingBuffer("BUSY") == 0 && this->state == EspV4ReadState::IDLE)
     {
       PRINTLN_WARNING(F("BUSY"));
       if(this->OnBusy != nullptr)
@@ -408,12 +414,12 @@ void EspDrv::Loop()
       busyTryCount++;
       busyTimeout = min(busyTimeout * 2 + random(200, 1000), 5000);
       busyTime = millis();
-      this->state = EspReadState::BUSY;
+      this->state = EspV4ReadState::BUSY;
     }
   }
 }
 
-void EspDrv::Init(uint8_t receivedBufferSize,
+void EspDrvV4::Init(uint8_t receivedBufferSize,
                   uint16_t maxAllowedDataLength,
                   unsigned long interByteTimeoutMs,
                   unsigned long fixedTimeoutReserveMs)
@@ -428,6 +434,7 @@ void EspDrv::Init(uint8_t receivedBufferSize,
       delay(3000);
       if(this->SendCmd(F("ATE0"), "OK", 10000))
       {
+        this->SendCmd(F("AT+SYSSTORE=0"), "OK", 1000);
         this->SendCmd(F("AT+CWMODE=1"), "OK", 1000);
       }
       GetConnectionStatus(true);
@@ -437,23 +444,65 @@ void EspDrv::Init(uint8_t receivedBufferSize,
   this->receivedDataBufferSize = receivedBufferSize;
 }
 
-int EspDrv::Connect(const char* ssid, const char* password) 
+int EspDrvV4::Connect(const char* ssid, const char* password)
 {
-  if(this->SendCmd(F("AT+CWJAP_CUR=\"%s\",\"%s\""), "OK", 10000, ssid, password))
+  if(this->SendCmd(F("AT+CWJAP=\"%s\",\"%s\""), "OK", 10000, ssid, password))
   {
     delay(100);
     if(this->SendCmd(F("AT+CIPMUX=0"), "OK", 10000))
     {
       delay(100);
       int status = GetConnectionStatus(true);
+      if(status == WL_CONNECTED && this->sntpServer != nullptr)
+      {
+        this->SendCmd(F("AT+CIPSNTPCFG=1,%d,\"%s\""), "+TIME_UPDATED", 15000,
+                      (int)this->sntpTimezone, this->sntpServer);
+        delay(100);
+      }
       return status == WL_CONNECTED;
     }
   }
   return WL_DISCONNECTED;
 }
 
-int EspDrv::TCPConnect(const char* url, int port)
+void EspDrvV4::SetSecure(bool enabled, uint8_t authMode)
 {
+  this->secure = enabled;
+  this->sslAuthMode = authMode;
+}
+
+void EspDrvV4::SetTimeSource(const char* server, int8_t timezone)
+{
+  this->sntpServer = server;
+  this->sntpTimezone = timezone;
+}
+
+bool EspDrvV4::SetTime(unsigned long unixTime)
+{
+  return this->SendCmd(F("AT+SYSTIMESTAMP=%lu"), "OK", 1000, unixTime);
+}
+
+int EspDrvV4::TCPConnect(const char* url, int port)
+{
+  if(this->secure)
+  {
+    if(!this->SendCmd(F("AT+CIPSSLCCONF=%d,0,0"), "OK", 1000, this->sslAuthMode))
+    {
+      return 0;
+    }
+    delay(100);
+    if(!this->SendCmd(F("AT+CIPSSLCSNI=\"%s\""), "OK", 1000, url))
+    {
+      return 0;
+    }
+    delay(100);
+    if(this->SendCmd(F("AT+CIPSTART=\"SSL\",\"%s\",%d"), "OK", 20000, url, port))
+    {
+      delay(100);
+      GetClientStatus(true);
+    }
+    return 0;
+  }
   if(this->SendCmd(F("AT+CIPSTART=\"TCP\",\"%s\",%d"), "OK", 10000, url, port))
   {
     delay(100);
@@ -463,7 +512,7 @@ int EspDrv::TCPConnect(const char* url, int port)
   return 0;
 }
 
-bool EspDrv::Write(uint8_t* data, uint16_t length) 
+bool EspDrvV4::Write(uint8_t* data, uint16_t length) 
 {
   bool result = false;
   if(this->SendCmd(F("AT+CIPSEND=%d"), ">", 1000, length))
@@ -478,7 +527,7 @@ bool EspDrv::Write(uint8_t* data, uint16_t length)
   return result;
 }
 
-void EspDrv::WaitUntilReady()
+void EspDrvV4::WaitUntilReady()
 {
   // Druhá podmínka (1s po lastDataSend) je workaround pro timing ESP firmware:
   // po AT+CIPSEND a odeslání dat ESP může s odstupem poslat dodatečné odpovědi
@@ -486,17 +535,17 @@ void EspDrv::WaitUntilReady()
   do
   {
     Loop();
-  } while(this->state != EspReadState::IDLE || millis() - lastDataSend < 1000);
+  } while(this->state != EspV4ReadState::IDLE || millis() - lastDataSend < 1000);
 }
 
-bool EspDrv::SendData(uint8_t* data, uint16_t length) 
+bool EspDrvV4::SendData(uint8_t* data, uint16_t length) 
 {
   WaitUntilReady();
   this->serial->write(data, length);
   return WaitForTag("SEND OK", 1000);
 }
 
-bool EspDrv::SendCmd(const __FlashStringHelper* cmd, const char* tag, unsigned long timeout, ...)
+bool EspDrvV4::SendCmd(const __FlashStringHelper* cmd, const char* tag, unsigned long timeout, ...)
 {
   char cmdBuf[CMD_BUFFER_SIZE];
   va_list args;
@@ -515,7 +564,7 @@ bool EspDrv::SendCmd(const __FlashStringHelper* cmd, const char* tag, unsigned l
   return tagResult;
 }
 
-bool EspDrv::WaitForTag(const char* pTag, unsigned long timeout) 
+bool EspDrvV4::WaitForTag(const char* pTag, unsigned long timeout) 
 {
   this->expectedTag = pTag;
   unsigned long m = millis();
@@ -544,13 +593,13 @@ bool EspDrv::WaitForTag(const char* pTag, unsigned long timeout)
   return result;
 }
 
-void EspDrv::TagReceived(const char* pTag) 
+void EspDrvV4::TagReceived(const char* pTag) 
 {
   this->tag = pTag;
   this->expectedTag = nullptr;
 }
 
-void EspDrv::GetStatus(bool force)
+void EspDrvV4::GetStatus(bool force)
 {
   /*
   2 - GOT IP - může dojít k výpadku WiFi
@@ -558,43 +607,43 @@ void EspDrv::GetStatus(bool force)
   4 - TCP not conected
   5 - wifi not connected
   */
-  if(millis() - statusRead < 1000 && !force && lastConnectionStatus != 5)
+  if(millis() - statusRead < 1000 && !force && lastConnectionStatus != 5 && lastConnectionStatus != 0)
   {
     return;
   }
 
   this->SendCmd(F("AT+CIPSTATUS"), "OK", 1000);
   statusFound = false;
-  if(this->state == EspReadState::STATUS)
+  if(this->state == EspV4ReadState::STATUS)
   {
-    this->state = EspReadState::IDLE;
+    this->state = EspV4ReadState::IDLE;
   }
   statusRead = millis();
 }
 
-int EspDrv::GetConnectionStatus()
+int EspDrvV4::GetConnectionStatus()
 {
   return GetConnectionStatus(false);
 }
-int EspDrv::GetConnectionStatus(bool force)
+int EspDrvV4::GetConnectionStatus(bool force)
 {
   GetStatus(force);
   if(lastConnectionStatus == 2 || lastConnectionStatus == 3 || lastConnectionStatus == 4)
   {
     return WL_CONNECTED;
   }
-  else if(lastConnectionStatus == 5)
+  else if(lastConnectionStatus == 0 || lastConnectionStatus == 5)
   {
 		return WL_DISCONNECTED;
   }
 	return WL_IDLE_STATUS;
 }
 
-uint8_t EspDrv::GetClientStatus()
+uint8_t EspDrvV4::GetClientStatus()
 {
   return GetClientStatus(false);
 }
-uint8_t EspDrv::GetClientStatus(bool force)
+uint8_t EspDrvV4::GetClientStatus(bool force)
 {
   GetStatus(force);
   if(lastConnectionStatus == 3)
@@ -604,13 +653,13 @@ uint8_t EspDrv::GetClientStatus(bool force)
   return CL_DISCONNECTED;
 }
 
-void EspDrv::Disconnect()
+void EspDrvV4::Disconnect()
 {
   this->SendCmd(F("AT+CWQAP"), "OK", 1000);
   lastConnectionStatus = GetConnectionStatus(true);
 }
 
-void EspDrv::Close()
+void EspDrvV4::Close()
 {
   if(inClose)
   {
@@ -622,7 +671,7 @@ void EspDrv::Close()
   inClose = false;
 }
 
-void EspDrv::Reset()
+void EspDrvV4::Reset()
 {
   if(this->SendCmd(F("AT+RST"), "OK", 30000))
   {
@@ -635,23 +684,23 @@ void EspDrv::Reset()
   }
 }
 
-uint8_t EspDrv::GetMemAllocFailCount()
+uint8_t EspDrvV4::GetMemAllocFailCount()
 {
   return this->memAllocFailCount;
 }
 
-uint8_t EspDrv::GetTagRecognitionFailCount()
+uint8_t EspDrvV4::GetTagRecognitionFailCount()
 {
   return this->tagRecognitionFailCount;
 }
 
-int8_t EspDrv::GetRssi()
+int8_t EspDrvV4::GetRssi()
 {
   cwjapFound = false;
-  this->SendCmd(F("AT+CWJAP_CUR?"), "OK", 1000);
-  if(this->state == EspReadState::CWJAP)
+  this->SendCmd(F("AT+CWJAP?"), "OK", 1000);
+  if(this->state == EspV4ReadState::CWJAP)
   {
-    this->state = EspReadState::IDLE;
+    this->state = EspV4ReadState::IDLE;
   }
   return lastRssi;
 }

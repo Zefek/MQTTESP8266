@@ -1,29 +1,30 @@
 #include "MQTTClient.h"
 #include <avr/wdt.h>
 
-bool MQTTClient::pingOutstanding = false;
-void (*MQTTClient::callback)(char* topic, uint8_t* payload, uint16_t plength) = 0;
-bool MQTTClient::suback = false;
-bool MQTTClient::connack = false;
-uint8_t MQTTClient::qosBufferHead = 0;
-uint8_t MQTTClient::qosBufferTail = 0;
-uint8_t MQTTClient::qosBufferCount = 0;
-bool MQTTClient::fullQoSBuffer = false;
-uint8_t MQTTClient::qosBufferLength = 16;
-uint16_t* MQTTClient::qosBufferPacketIds;
+MQTTClient* mqttClientInstance = nullptr;
 
 void MQTTClient::DataReceived(uint8_t* data, int length)
+{
+  if(mqttClientInstance != nullptr)
+  {
+    mqttClientInstance->HandleData(data, length);
+  }
+}
+
+void MQTTClient::HandleData(uint8_t* data, int length)
 {
   switch(data[0]&0xF0)
   {
     case MQTTSUBACK:
-      MQTTClient::suback = true;
+      suback = true;
     break;
     case MQTTCONNACK:
       connack = true;
+      // CONNACK = 0x20 0x02 <session present> <return code>
+      connackCode = length >= 4 ? data[3] : 0xFF;
     break;
     case MQTTPINGRESP:
-      MQTTClient::pingOutstanding = false;
+      pingOutstanding = false;
     break;
     case MQTTPUBLISH:
     {
@@ -95,9 +96,10 @@ void MQTTClient::DataReceived(uint8_t* data, int length)
   }
 }
 
-MQTTClient::MQTTClient(EspDrv *espDriver, void(*callback)(char* topic, uint8_t* payload, uint16_t plength), uint8_t pQosBufferLength = 16)
+MQTTClient::MQTTClient(IEspDrv *espDriver, void(*callback)(char* topic, uint8_t* payload, uint16_t plength), uint8_t pQosBufferLength)
 {
   this->client = espDriver;
+  mqttClientInstance = this;
   this->client->DataReceived = &DataReceived;
   this->buffer = new uint8_t[bufferSize];
   this->callback = callback;
@@ -116,6 +118,9 @@ bool MQTTClient::Connect(const MQTTConnectData& mqttConnectData)
   qosBufferHead = qosBufferTail = 0;
   qosBufferCount = 0;
   nextMsgId = 0;
+  pingOutstanding = false;
+  pingSentAt = 0;
+  lastOutActivity = millis();
   return this->Login(mqttConnectData);
 }
 
@@ -178,17 +183,35 @@ bool MQTTClient::Login(const MQTTConnectData& mqttConnectData)
       length = WriteString(mqttConnectData.pass,this->buffer,length);
     }
   }
-  Write(MQTTCONNECT,this->buffer,length-MQTT_MAX_HEADER_SIZE);
-  unsigned long t = millis();
+  // Reset PRED odeslanim: Write() blokuje a uvnitr vola Loop(), takze CONNACK
+  // muze dorazit jeste behem nej. Nulovani az potom by priznak zahodilo a
+  // cekaci smycka by marne vytocila celych 10 s.
   isConnected = false;
   connack = false;
+  connackCode = 0xFF;
+  Write(MQTTCONNECT,this->buffer,length-MQTT_MAX_HEADER_SIZE);
+  unsigned long t = millis();
   while(!connack && millis() - t < 10000)
   {
     wdt_reset();
     client->Loop();
   }
+  if(!connack || connackCode != 0)
+  {
+    // MQTT-3.2.2-5: po CONNACK s nenulovym navratovym kodem musi klient
+    // zavrit spojeni. Totez delame pri uplne chybejicim CONNACK - otevreny
+    // socket jeste neznamena navazanou MQTT session.
+    isConnected = false;
+    client->Close();
+    return false;
+  }
   isConnected = client->GetClientStatus() == CL_CONNECTED;
   return isConnected;
+}
+
+uint8_t MQTTClient::GetLastConnackCode()
+{
+  return connackCode;
 }
 
 uint16_t MQTTClient::WriteString(const char* string, uint8_t* buf, uint16_t pos)
@@ -230,7 +253,7 @@ bool MQTTClient::Subscribe(const char *topic, uint8_t qos)
   {
     return false;
   }
-  MQTTClient::suback = false;
+  suback = false;
   uint16_t length = MQTT_MAX_HEADER_SIZE;
   nextMsgId++;
   if (nextMsgId == 0)
@@ -243,13 +266,13 @@ bool MQTTClient::Subscribe(const char *topic, uint8_t qos)
   this->buffer[length++] = qos;
   Write(MQTTSUBSCRIBE|MQTTQOS1,this->buffer,length-MQTT_MAX_HEADER_SIZE);
   unsigned long t = millis();
-  while(!MQTTClient::suback && millis() - t < 3000)
+  while(!suback && millis() - t < 3000)
   {
     client->Loop();
   }
   delay(200);
   client->Loop();
-  return MQTTClient::suback;
+  return suback;
 }
 
 bool MQTTClient::Publish(const char* topic, const char* payload) 
@@ -302,13 +325,16 @@ bool MQTTClient::Publish(const char* topic, const uint8_t* payload, unsigned int
 
 void MQTTClient::Disconnect()
 {
-  if(!isConnected)
+  if(isConnected)
   {
-    return;
+    buffer[0] = MQTTDISCONNECT;
+    buffer[1] = 0;
+    this->client->Write(buffer, 2);
+    // MQTT-3.14.4-1: po odeslani DISCONNECT musi klient zavrit spojeni.
+    this->client->Close();
   }
-  buffer[0] = MQTTDISCONNECT;
-  buffer[1] = 0;
-  this->client->Write(buffer, 2);
+  isConnected = false;
+  pingOutstanding = false;
 }
 
 bool MQTTClient::Write(uint8_t header, uint8_t* buf, uint16_t length) 
@@ -361,14 +387,13 @@ size_t MQTTClient::BuildHeader(uint8_t header, uint8_t* buf, uint16_t length)
   return llen+1; // Full header size is variable length bit plus the 1-byte fixed header
 }
 
-void MQTTClient::sendPubAck(uint16_t packetId) 
+void MQTTClient::sendPubAck(uint16_t packetId)
 {
-    uint8_t pubackPacket[4];
-    pubackPacket[0] = 0x40;                // PUBACK packet type + flags
-    pubackPacket[1] = 0x02;                // Remaining length = 2
-    pubackPacket[2] = (packetId >> 8) & 0xFF;  // Packet ID MSB
-    pubackPacket[3] = packetId & 0xFF;
-    client->Write(pubackPacket, 4);
+  // Pres Write(), aby se aktualizoval lastOutActivity - potvrzeni je odchozi
+  // provoz a odsouva potrebu PINGREQ.
+  buffer[MQTT_MAX_HEADER_SIZE] = (packetId >> 8) & 0xFF;
+  buffer[MQTT_MAX_HEADER_SIZE + 1] = packetId & 0xFF;
+  this->Write(MQTTPUBACK, buffer, 2);
 }
 
 bool MQTTClient::Loop()
@@ -388,23 +413,25 @@ bool MQTTClient::Loop()
       this->client->Close();
     }
   }
-  if(currentMillis - lastOutActivity >= keepAlive * 1000 && keepAlive > 0 && isConnected)
+  if(keepAlive > 0 && isConnected)
   {
-    if(MQTTClient::pingOutstanding)
+    // PINGREQ na polovine intervalu a stejne dlouhe okno na PINGRESP znamena
+    // detekci mrtveho spojeni na 1.0x keepAlive, tedy drive nez nas server
+    // podle MQTT-3.1.2-24 odpoji na 1.5x.
+    unsigned long pingIntervalMs = (unsigned long)keepAlive * 500UL;
+    if(pingOutstanding)
     {
-      isConnected = false;
-      this->Disconnect();
-      return isConnected;
+      if(currentMillis - pingSentAt >= pingIntervalMs)
+      {
+        this->Disconnect();
+        return isConnected;
+      }
     }
-    else
+    else if(currentMillis - lastOutActivity >= pingIntervalMs)
     {
-      //Send ping request
-      MQTTClient::pingOutstanding = true;
-      lastOutActivity = currentMillis;
-      lastInActivity = currentMillis;
-      buffer[0] = MQTTPINGREQ;
-      buffer[1] = 0;
-      this->client->Write(buffer, 2);
+      pingOutstanding = true;
+      pingSentAt = currentMillis;
+      this->Write(MQTTPINGREQ, buffer, 0);
     }
   }
   this->client->Loop();
