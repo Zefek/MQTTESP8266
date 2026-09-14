@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [7.0.0] - 2026-09-06
+## [7.0.0] - 2026-09-14
 
 Adds support for the ESP-AT v2+ command set (ESP32 and newer ESP8266
 firmware) alongside the existing ESP8266 AT v1.x driver, and fixes five
@@ -50,6 +50,16 @@ compile without modification.
   window is allowed for `PINGRESP`, so a dead link is detected at 1.0x Keep
   Alive — before the server gives up at 1.5x (MQTT-3.1.2-24). Previously the
   ping went out exactly on the interval with no dedicated response timeout.
+- `EspDrvV4` no longer waits a fixed second after sending data before issuing
+  the next AT command; `WaitUntilReady()` only waits for the receive state
+  machine to return to idle. The ESP8266 v1.x manual folds the parameterless
+  `AT+CIPSEND` (passthrough) and `AT+CIPSEND=<length>` (normal transmission)
+  into one paragraph, and the "wait at least 1 second before sending next AT
+  command" sentence there is easy to read as applying to both. The current
+  documentation splits the two: the Execute Command (passthrough) carries that
+  note, the Set Command used by this driver carries no wait requirement at all.
+  `EspDrv` keeps the one-second guard — the v1.x firmware is what the ambiguous
+  paragraph describes, and there is nothing to gain by changing it.
 - `MQTTClient` no longer keeps its state in static members. Ten fields
   including the QoS buffer and the message callback were shared between all
   instances; they are now per-object, with a single file-scope pointer used
@@ -92,6 +102,18 @@ compile without modification.
   socket state and ignored both `connack` and its return code, so wrong
   credentials produced a "connected" client. It now requires a CONNACK with
   return code 0 and closes the connection otherwise, per MQTT-3.2.2-5.
+- **Losing the MQTT connection also re-associated WiFi.** `Disconnect()`,
+  `Close()` and `Reset()` assigned the result of `GetConnectionStatus()` back
+  into `lastConnectionStatus`. That field holds the raw `AT+CIPSTATUS` digit
+  (0-5), while the getter returns a translated `WL_*` value (1, 0 or -1), so
+  after a close the field held 1 — which belongs neither to the connected set
+  {2,3,4} nor to the disconnected set {0,5}. `GetConnectionStatus()` then
+  reported `WL_IDLE_STATUS`, and applications that read that as "WiFi is
+  down" rejoined the access point after every `Close()` — in practice after
+  every data timeout — and counted a WiFi reconnect that never happened. The
+  one-second cache in `GetStatus()` kept the bogus value alive, because 1 is
+  neither 0 nor 5. The three call sites now discard the return value; the
+  call already refreshes the raw state through the `STATUS:` parser.
 
 ### Migration Guide
 

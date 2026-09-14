@@ -41,7 +41,6 @@ class EspDrvV4 : public IEspDrv
     unsigned long startDataReadMillis = 0;
     unsigned long statusRead = 0;
     int lastConnectionStatus = 0;
-    unsigned long lastDataSend = 0;
     unsigned long statusTimer = 0;
     uint8_t statusCounter = 0;
     const char* expectedTag = nullptr;

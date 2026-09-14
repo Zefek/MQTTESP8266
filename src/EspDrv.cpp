@@ -607,7 +607,7 @@ uint8_t EspDrv::GetClientStatus(bool force)
 void EspDrv::Disconnect()
 {
   this->SendCmd(F("AT+CWQAP"), "OK", 1000);
-  lastConnectionStatus = GetConnectionStatus(true);
+  GetConnectionStatus(true);
 }
 
 void EspDrv::Close()
@@ -618,7 +618,7 @@ void EspDrv::Close()
   }
   inClose = true;
   this->SendCmd(F("AT+CIPCLOSE"), "OK", 1000);
-  lastConnectionStatus = GetConnectionStatus(true);
+  GetConnectionStatus(true);
   inClose = false;
 }
 
@@ -631,7 +631,7 @@ void EspDrv::Reset()
     {
       this->SendCmd(F("AT+CWMODE=1"), "OK", 1000);
     }
-    lastConnectionStatus = GetConnectionStatus(true);
+    GetConnectionStatus(true);
   }
 }
 

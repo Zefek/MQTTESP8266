@@ -518,7 +518,6 @@ bool EspDrvV4::Write(uint8_t* data, uint16_t length)
   if(this->SendCmd(F("AT+CIPSEND=%d"), ">", 1000, length))
   {
     result = SendData(data, length);
-    lastDataSend = millis();
   }
   if(result)
   {
@@ -529,13 +528,10 @@ bool EspDrvV4::Write(uint8_t* data, uint16_t length)
 
 void EspDrvV4::WaitUntilReady()
 {
-  // Druhá podmínka (1s po lastDataSend) je workaround pro timing ESP firmware:
-  // po AT+CIPSEND a odeslání dat ESP může s odstupem poslat dodatečné odpovědi
-  // nebo příchozí +IPD. Bez tohoto čekání by další SendCmd mohl narušit příjem.
   do
   {
     Loop();
-  } while(this->state != EspV4ReadState::IDLE || millis() - lastDataSend < 1000);
+  } while(this->state != EspV4ReadState::IDLE);
 }
 
 bool EspDrvV4::SendData(uint8_t* data, uint16_t length) 
@@ -656,7 +652,7 @@ uint8_t EspDrvV4::GetClientStatus(bool force)
 void EspDrvV4::Disconnect()
 {
   this->SendCmd(F("AT+CWQAP"), "OK", 1000);
-  lastConnectionStatus = GetConnectionStatus(true);
+  GetConnectionStatus(true);
 }
 
 void EspDrvV4::Close()
@@ -667,7 +663,7 @@ void EspDrvV4::Close()
   }
   inClose = true;
   this->SendCmd(F("AT+CIPCLOSE"), "OK", 1000);
-  lastConnectionStatus = GetConnectionStatus(true);
+  GetConnectionStatus(true);
   inClose = false;
 }
 
@@ -680,7 +676,7 @@ void EspDrvV4::Reset()
     {
       this->SendCmd(F("AT+CWMODE=1"), "OK", 1000);
     }
-    lastConnectionStatus = GetConnectionStatus(true);
+    GetConnectionStatus(true);
   }
 }
 
