@@ -60,7 +60,16 @@ class EspDrvV4 : public IEspDrv
     uint8_t sslAuthMode = 2;
     const char* sntpServer = nullptr;
     int8_t sntpTimezone = 0;
+    bool initialized = false;
+    bool timeSynced = false;
+    uint8_t lineLength = 0;
+    bool rxSinceCmd = false;
+    uint8_t silentCount = 0;
+    bool moduleLost = false;
 
+    bool WaitForModule(unsigned long timeout);
+    void InitModule(unsigned long waitTimeout);
+    bool SyncTime();
     bool SendData(uint8_t* data, uint16_t length);
     bool SendCmd(const __FlashStringHelper* cmd, const char* tag, unsigned long timeout, ...);
     void TagReceived(const char* pTag);

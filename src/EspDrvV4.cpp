@@ -143,6 +143,8 @@ void EspDrvV4::Loop()
     }
     #endif
     char c = (char)raw;
+    rxSinceCmd = true;
+    moduleLost = false;
     switch(this->state)
     {
       case EspV4ReadState::STATUS:
@@ -342,6 +344,11 @@ void EspDrvV4::Loop()
     {
       ringBuffer[ringBufferTail] = c;
       ringBufferTail = (ringBufferTail + 1) % ringBufferLength;
+      lineLength = lineLength == 255? lineLength : lineLength + 1;
+    }
+    else if(c == '\r' || c == '\n')
+    {
+      lineLength = 0;
     }
     if((this->state == EspV4ReadState::IDLE || this->state == EspV4ReadState::BUSY) && this->expectedTag != nullptr)
     {
@@ -404,6 +411,14 @@ void EspDrvV4::Loop()
       lastConnectionStatus = 4;
       statusRead = millis();
     }
+    else if (lineLength == 5 && CompareRingBuffer("ready") == 0 && (this->state == EspV4ReadState::IDLE || this->state == EspV4ReadState::BUSY))
+    {
+      PRINTLN_WARNING(F("Module restarted"));
+      initialized = false;
+      timeSynced = false;
+      lastConnectionStatus = 0;
+      statusRead = millis();
+    }
     else if (CompareRingBuffer("BUSY") == 0 && this->state == EspV4ReadState::IDLE)
     {
       PRINTLN_WARNING(F("BUSY"));
@@ -427,25 +442,68 @@ void EspDrvV4::Init(uint8_t receivedBufferSize,
   this->maxAllowedDataLength = maxAllowedDataLength;
   this->interByteTimeoutMs = interByteTimeoutMs;
   this->fixedTimeoutReserveMs = fixedTimeoutReserveMs;
-  if(this->SendCmd(F("ATE0"), "OK", 1000))
-  {
-    if(this->SendCmd(F("AT+RST"), "OK", 30000))
-    {
-      delay(3000);
-      if(this->SendCmd(F("ATE0"), "OK", 10000))
-      {
-        this->SendCmd(F("AT+SYSSTORE=0"), "OK", 1000);
-        this->SendCmd(F("AT+CWMODE=1"), "OK", 1000);
-      }
-      GetConnectionStatus(true);
-    }
-  }
   this->receivedDataBuffer = new uint8_t[receivedBufferSize];
   this->receivedDataBufferSize = receivedBufferSize;
+  InitModule(10000);
+}
+
+bool EspDrvV4::WaitForModule(unsigned long timeout)
+{
+  unsigned long m = millis();
+  do
+  {
+    if(this->SendCmd(F("AT"), "OK", 500))
+    {
+      return true;
+    }
+  } while(millis() - m < timeout);
+  return false;
+}
+
+void EspDrvV4::InitModule(unsigned long waitTimeout)
+{
+  initialized = false;
+  timeSynced = false;
+  if(!WaitForModule(waitTimeout))
+  {
+    return;
+  }
+  if(this->SendCmd(F("AT+RST"), "OK", 30000))
+  {
+    delay(3000);
+    if(WaitForModule(10000) && this->SendCmd(F("ATE0"), "OK", 1000))
+    {
+      this->SendCmd(F("AT+CWAUTOCONN=0"), "OK", 1000);
+      this->SendCmd(F("AT+SYSSTORE=0"), "OK", 1000);
+      this->SendCmd(F("AT+CWMODE=1"), "OK", 1000);
+      initialized = true;
+    }
+    GetConnectionStatus(true);
+  }
+}
+
+bool EspDrvV4::SyncTime()
+{
+  if(this->sntpServer == nullptr)
+  {
+    return true;
+  }
+  timeSynced = this->SendCmd(F("AT+CIPSNTPCFG=1,%d,\"%s\""), "+TIME_UPDATED", 15000,
+                             (int)this->sntpTimezone, this->sntpServer);
+  delay(100);
+  return timeSynced;
 }
 
 int EspDrvV4::Connect(const char* ssid, const char* password)
 {
+  if(!initialized)
+  {
+    InitModule(1000);
+    if(!initialized)
+    {
+      return WL_DISCONNECTED;
+    }
+  }
   if(this->SendCmd(F("AT+CWJAP=\"%s\",\"%s\""), "OK", 10000, ssid, password))
   {
     delay(100);
@@ -453,11 +511,9 @@ int EspDrvV4::Connect(const char* ssid, const char* password)
     {
       delay(100);
       int status = GetConnectionStatus(true);
-      if(status == WL_CONNECTED && this->sntpServer != nullptr)
+      if(status == WL_CONNECTED)
       {
-        this->SendCmd(F("AT+CIPSNTPCFG=1,%d,\"%s\""), "+TIME_UPDATED", 15000,
-                      (int)this->sntpTimezone, this->sntpServer);
-        delay(100);
+        SyncTime();
       }
       return status == WL_CONNECTED;
     }
@@ -484,8 +540,17 @@ bool EspDrvV4::SetTime(unsigned long unixTime)
 
 int EspDrvV4::TCPConnect(const char* url, int port)
 {
+  if(!initialized)
+  {
+    InitModule(1000);
+    return 0;
+  }
   if(this->secure)
   {
+    if(!timeSynced && !SyncTime())
+    {
+      return 0;
+    }
     if(!this->SendCmd(F("AT+CIPSSLCCONF=%d,0,0"), "OK", 1000, this->sslAuthMode))
     {
       return 0;
@@ -500,6 +565,10 @@ int EspDrvV4::TCPConnect(const char* url, int port)
     {
       delay(100);
       GetClientStatus(true);
+    }
+    else
+    {
+      timeSynced = false;
     }
     return 0;
   }
@@ -566,6 +635,7 @@ bool EspDrvV4::WaitForTag(const char* pTag, unsigned long timeout)
   unsigned long m = millis();
   unsigned long t = m;
   this->tag = "";
+  rxSinceCmd = false;
   while (strncmp(this->tag, pTag, strlen(pTag)) != 0 && t - m < timeout) 
   {
     wdt_reset();
@@ -580,10 +650,20 @@ bool EspDrvV4::WaitForTag(const char* pTag, unsigned long timeout)
     PRINT_ERROR(" received tag ");
     PRINTLN_ERROR(tag);
     tagRecognitionFailCount = tagRecognitionFailCount == 255? tagRecognitionFailCount : tagRecognitionFailCount + 1;;
+    silentCount = rxSinceCmd? 0 : (silentCount == 255? silentCount : silentCount + 1);
+    if(silentCount >= 3 && !moduleLost)
+    {
+      PRINTLN_WARNING(F("Module lost"));
+      moduleLost = true;
+      initialized = false;
+      timeSynced = false;
+      lastConnectionStatus = 0;
+    }
   }
   else
   {
     tagRecognitionFailCount = 0;
+    silentCount = 0;
   }
   this->tag = "";
   return result;
@@ -603,6 +683,10 @@ void EspDrvV4::GetStatus(bool force)
   4 - TCP not conected
   5 - wifi not connected
   */
+  if(moduleLost && !force)
+  {
+    return;
+  }
   if(millis() - statusRead < 1000 && !force && lastConnectionStatus != 5 && lastConnectionStatus != 0)
   {
     return;
@@ -624,6 +708,10 @@ int EspDrvV4::GetConnectionStatus()
 int EspDrvV4::GetConnectionStatus(bool force)
 {
   GetStatus(force);
+  if(!initialized)
+  {
+    return WL_DISCONNECTED;
+  }
   if(lastConnectionStatus == 2 || lastConnectionStatus == 3 || lastConnectionStatus == 4)
   {
     return WL_CONNECTED;
@@ -669,15 +757,7 @@ void EspDrvV4::Close()
 
 void EspDrvV4::Reset()
 {
-  if(this->SendCmd(F("AT+RST"), "OK", 30000))
-  {
-    delay(3000);
-    if(this->SendCmd(F("ATE0"), "OK", 10000))
-    {
-      this->SendCmd(F("AT+CWMODE=1"), "OK", 1000);
-    }
-    GetConnectionStatus(true);
-  }
+  InitModule(10000);
 }
 
 uint8_t EspDrvV4::GetMemAllocFailCount()
