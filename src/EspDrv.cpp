@@ -501,7 +501,7 @@ bool EspDrv::SendCmd(const __FlashStringHelper* cmd, const char* tag, unsigned l
   char cmdBuf[CMD_BUFFER_SIZE];
   va_list args;
   va_start(args, timeout);
-  vsnprintf_P(cmdBuf, CMD_BUFFER_SIZE, (char*)cmd, args);
+  vsnprintf_P(cmdBuf, CMD_BUFFER_SIZE, reinterpret_cast<const char*>(cmd), args);
   va_end(args);
   WaitUntilReady();
   PRINTLN_DEBUG(cmdBuf);
